@@ -14,14 +14,6 @@ Read-only price overlay for CS2 items on Steam Community pages and CSFloat. Open
 - Displays Steam trade history with USD values from local cache (Steam-side only — no server sync).
 - Optional: signs you in to CSBOARD via cookies to inherit your preferred currency / price source.
 
-## What it does NOT do
-
-- No Trade Boards (P2P listing creation, acceptance, escrow).
-- No P2P trade automation, mobile-auth probing, or rollback monitoring.
-- No `/trade-history/sync` upload to backend.
-- No float lookup endpoint (use the website's float checker).
-- No `/users/me`, `/prices` (POST batch), or `/float?link=` calls — these don't exist on production.
-
 ## Endpoints used
 
 Only public/auth endpoints that exist on production:
