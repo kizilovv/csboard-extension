@@ -1,0 +1,148 @@
+{
+  "manifest_version": 3,
+  "name": "CSBOARD",
+  "version": "1.0.0",
+  "description": "Multi-source CS2 price overlays for Steam community pages and CSFloat. Open source, no tracking.",
+  "homepage_url": "https://csboard.com",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "notifications",
+    "alarms",
+    "cookies",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "*://steamcommunity.com/*",
+    "*://store.steampowered.com/*",
+    "*://api.steampowered.com/*",
+    "https://csboard.com/*",
+    "https://csboard.trade/*",
+    "https://csfloat.com/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://csboard.com/*",
+      "https://csboard.trade/*",
+      "https://steamcommunity.com/*"
+    ]
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "steamcommunity_ruleset",
+        "enabled": true,
+        "path": "src/steamcommunity_ruleset.json"
+      }
+    ]
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://steamcommunity.com/tradeoffer/*"
+      ],
+      "js": ["src/content-scripts/steam/trade-offer.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/id/*/inventory*",
+        "*://steamcommunity.com/profiles/*/inventory*"
+      ],
+      "js": ["src/content-scripts/steam/inventory.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/market/listings/730/*"
+      ],
+      "js": ["src/content-scripts/steam/market.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/*/tradeoffers*"
+      ],
+      "js": ["src/content-scripts/steam/trade-offers.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/market/search*"
+      ],
+      "js": ["src/content-scripts/steam/market-search.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/*/inventoryhistory*",
+        "*://steamcommunity.com/*/tradehistory*"
+      ],
+      "js": ["src/content-scripts/steam/trade-history.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/id/*",
+        "*://steamcommunity.com/profiles/*"
+      ],
+      "js": ["src/content-scripts/steam/profile.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/*/friends*"
+      ],
+      "js": ["src/content-scripts/steam/friends.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://csfloat.com/*"
+      ],
+      "js": ["src/content-scripts/csfloat/csfloat.ts"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injectToPage/inventoryExtractor.js",
+        "injectToPage/ShowTradeOffer.js",
+        "injectToPage/pageVisitor.js"
+      ],
+      "matches": [
+        "*://steamcommunity.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "injectToPage/csfloatInterceptor.js",
+        "icons/buff163.png"
+      ],
+      "matches": [
+        "https://csfloat.com/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
