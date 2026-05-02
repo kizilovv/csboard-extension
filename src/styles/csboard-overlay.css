@@ -1,0 +1,612 @@
+/* ============================================================
+   CSBOARD Overlay Styles — cs2trader-native look
+   ============================================================
+   All indicators match cs2trader's generalCSTStyle.css exactly:
+   - No background on item overlays (clean, native look)
+   - Same positioning, font sizes, colors
+   ============================================================ */
+
+:root {
+  --steam-old-font: Arial, Helvetica, Verdana, sans-serif;
+  --steam-ingame-green: #90ba3c;
+  --steam-nametag-red: #bd4847;
+  --steam-stattrak-orange: rgb(207, 106, 50);
+  --steam-souvenir-yellow: rgb(255, 215, 0);
+  --steam-online-blue: #57cbde;
+}
+
+/* ============================================================
+   cs2trader EXACT: Item Overlay Indicators
+   ============================================================ */
+
+/* Price — bottom-left, white, no background */
+.priceIndicator {
+  color: white;
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  font-size: 0.8rem;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Float — above price, smaller, blue tint */
+.floatIndicator {
+  color: #b3cae8;
+  font-size: 0.6rem;
+  position: absolute;
+  bottom: 17px;
+  left: 2px;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Exterior + StatTrak/Souvenir — top-right */
+.exteriorSTInfo {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 0.8rem;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+.exteriorIndicator { color: white; }
+.stattrakOrange { color: var(--steam-stattrak-orange); margin-right: 2px; }
+.souvenirYellow { color: var(--steam-souvenir-yellow); margin-right: 2px; }
+
+/* Sticker total price — below exterior, top-right */
+.stickerPrice {
+  position: absolute;
+  right: 2px;
+  top: 15px;
+  font-size: 0.6rem;
+  color: white;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Buff bid — secondary price, small, blue */
+.buffBidIndicator {
+  color: var(--steam-online-blue);
+  position: absolute;
+  bottom: 17px;
+  right: 2px;
+  font-size: 0.6rem;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Paint seed */
+.paintSeedIndicator {
+  color: white;
+  position: absolute;
+  bottom: 30px;
+  right: 2px;
+  font-size: 0.7rem;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Boosted price warning */
+.boostedPrice { color: red; }
+
+/* Contrasting background (optional toggle) */
+.contrastingBackground {
+  background-color: black;
+  padding: 1px;
+  border-radius: 4px;
+}
+
+/* Trade hold badge ("7d") — top-left corner */
+.perItemDate {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 0.7rem;
+  font-family: var(--steam-old-font);
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+}
+.not_tradable { color: #bd4847; }
+.tradable { color: var(--steam-ingame-green); }
+
+/* cs2trader: selected item white border — MUST override colored borders */
+.item.activeInfo {
+  border-color: white !important;
+  outline: 2px solid white;
+  outline-offset: -2px;
+}
+
+/* Duplicate count badge */
+.csboard-duplicate-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: rgba(79, 142, 247, 0.85);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+/* ============================================================
+   cs2trader EXACT: P/L indicators
+   ============================================================ */
+
+.profit { color: var(--steam-ingame-green); }
+.loss { color: red; }
+
+/* P/L badge on trade offers list — top-right of .tradeoffer_items_ctn */
+.profitOrLoss {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  font-size: 1rem;
+  font-family: var(--steam-old-font);
+  z-index: 100;
+  padding: 2px 6px;
+  border-radius: 0 0 0 4px;
+  background: rgba(0,0,0,0.85);
+}
+
+/* ============================================================
+   cs2trader EXACT: Function bars
+   ============================================================ */
+
+#offer_function_bar { margin-top: -18px; margin-bottom: 2px; }
+.functionBarRow { height: 30px; font-size: 12px; color: #c6d4df; }
+.keyNumberInput { width: 50px; }
+.offer_action { margin-right: 10px; }
+.clickable { cursor: pointer; }
+.bold { font-weight: bold; }
+
+/* Selected items — cs2trader exact */
+.cstSelected { border: 1px dashed white !important; }
+
+/* Fix inventory item link overlap */
+a.inventory_item_link { top: 20px !important; }
+
+/* ============================================================
+   CSBOARD: Trade Board Banner
+   ============================================================ */
+
+.csboard-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid #4f8ef7;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #e4e4e7;
+}
+
+.csboard-banner-icon { color: #4f8ef7; flex-shrink: 0; }
+
+.csboard-banner-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.csboard-banner-content strong { color: #4f8ef7; font-size: 14px; }
+.csboard-banner-content a { color: #60a5fa; text-decoration: none; }
+.csboard-banner-content a:hover { text-decoration: underline; }
+
+.csboard-overpay { color: #22c55e; font-weight: 600; }
+
+.csboard-banner-status {
+  font-size: 11px;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ============================================================
+   CSBOARD: Valuation Banner (inventory page)
+   ============================================================ */
+
+.csboard-valuation-bar {
+  font-size: 13px;
+  color: #c6d4df;
+  padding: 6px 0;
+  margin: 4px 0;
+  font-family: var(--steam-old-font);
+}
+.csboard-valuation-bar > span:first-child {
+  font-weight: bold;
+  color: #67c1f5;
+}
+.csboard-val-price { color: white; font-weight: bold; }
+.csboard-val-source { color: #8f98a0; }
+
+/* ============================================================
+   CSBOARD: Context Menu
+   ============================================================ */
+
+.csboard-context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: #1b2838;
+  border: 1px solid #4c5866;
+  padding: 6px 0;
+  min-width: 180px;
+  font-size: 12px;
+  color: #c6d4df;
+  font-family: var(--steam-old-font);
+}
+.csboard-ctx-price { padding: 4px 12px; color: white; font-weight: bold; font-size: 13px; }
+.csboard-ctx-name { padding: 2px 12px; color: #8f98a0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px; }
+.csboard-ctx-sep { height: 1px; background: #4c5866; margin: 4px 0; }
+.csboard-ctx-item { display: block; padding: 4px 12px; color: #c6d4df; text-decoration: none; cursor: pointer; }
+.csboard-ctx-item:hover { background: #2a475e; color: white; }
+.csboard-ctx-icon { display: inline-block; width: 14px; text-align: center; margin-right: 6px; font-weight: bold; }
+/* Buff favicon used inline by the CSFloat overlay only. The Steam content
+   scripts intentionally do NOT use this icon — their price overlays sit at
+   sub-10px font sizes and the icon ends up clipped by Steam's own card chrome. */
+.csboard-buff-ico {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+  margin-right: 4px;
+  border-radius: 2px;
+  display: inline-block;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+/* ============================================================
+   CSBOARD: Market Page
+   ============================================================ */
+
+#csboard-market-banner { margin: 8px 0 16px; }
+
+.csboard-market-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #1b2838;
+  border: 1px solid #4c5866;
+  border-radius: 4px;
+  padding: 10px 16px;
+  font-family: var(--steam-old-font);
+  font-size: 13px;
+  color: #c6d4df;
+  flex-wrap: wrap;
+}
+
+.csboard-logo { font-size: 12px; font-weight: 800; color: #67c1f5; }
+.csboard-price-item { color: #8f98a0; }
+.csboard-price-item strong { color: #c6d4df; }
+.csboard-savings { color: var(--steam-ingame-green); font-weight: 600; font-size: 12px; }
+.csboard-view-btn { margin-left: auto; color: #67c1f5; text-decoration: none; font-weight: 600; font-size: 12px; }
+.csboard-view-btn:hover { text-decoration: underline; }
+
+/* Market listing labels */
+.csboard-listing-label {
+  display: inline-block;
+  font-family: var(--steam-old-font);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.csboard-listing-label.overpriced { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.csboard-listing-label.underpriced { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.csboard-listing-label.fair { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+
+/* ============================================================
+   CSBOARD: Trade Offers List
+   ============================================================ */
+
+/* Global summary bar */
+#csboard-trades-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #1b2838;
+  border: 1px solid #4c5866;
+  border-radius: 4px;
+  padding: 10px 16px;
+  margin: 0 0 12px;
+  font-family: var(--steam-old-font);
+  font-size: 13px;
+  color: #8f98a0;
+  flex-wrap: wrap;
+}
+#csboard-trades-summary strong { color: #c6d4df; }
+.csboard-summary-green { color: var(--steam-ingame-green) !important; }
+.csboard-summary-item { white-space: nowrap; }
+.csboard-summary-sep { color: #4c5866; }
+
+/* Sort dropdown — Steam native look */
+.csboard-sort-dropdown {
+  background: #1b2838;
+  color: #c6d4df;
+  border: 1px solid #4c5866;
+  border-radius: 2px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--steam-old-font);
+}
+.csboard-sort-dropdown:hover { border-color: #67c1f5; }
+
+/* Save sort button */
+.csboard-save-sort {
+  background: none;
+  border: 1px solid #4c5866;
+  color: #8f98a0;
+  padding: 3px 8px;
+  border-radius: 2px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--steam-old-font);
+}
+.csboard-save-sort:hover { border-color: #67c1f5; color: #c6d4df; }
+.csboard-save-sort.saved { color: var(--steam-ingame-green); border-color: var(--steam-ingame-green); }
+
+/* Trade History button */
+.csboard-trade-history-btn {
+  background: #3d6896;
+  border: 1px solid #4b8cbe;
+  color: #fff;
+  padding: 3px 10px;
+  border-radius: 2px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--steam-old-font);
+  margin-left: auto;
+}
+.csboard-trade-history-btn:hover { background: #4b8cbe; }
+
+/* ============================================================
+   CSBOARD: Trade Offer Page (single offer)
+   ============================================================ */
+
+/* Inventory totals on tab headers */
+.csboard-inv-total { font-family: var(--steam-old-font); }
+
+/* Trade totals in offer headers */
+.csboard-trade-total { font-weight: bold; }
+
+/* Trade summary — cs2trader #offerSummary style */
+#csboard-offer-summary {
+  padding-top: 10px;
+  text-align: center;
+  font-family: var(--steam-old-font);
+}
+.csboard-buff-summary {
+  margin-left: 10px;
+  font-size: 0.85em;
+  color: #8f98a0;
+}
+
+/* ============================================================
+   CSBOARD: Right Panel Upper Module (inventory item detail)
+   ============================================================ */
+.csboard-upper-module {
+  margin: 8px 0;
+  padding: 8px;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  color: #c6d4df;
+}
+.csboard-detail-price {
+  color: white;
+  font-size: 14px;
+  margin: 4px 0;
+  font-family: var(--steam-old-font);
+}
+.csboard-detail-price strong { color: #67c1f5; }
+.csboard-detail-float {
+  color: #b3cae8;
+  font-size: 13px;
+  margin: 4px 0;
+}
+.csboard-detail-seed {
+  color: #8f98a0;
+  font-size: 12px;
+  margin: 2px 0;
+}
+.csboard-detail-trade {
+  font-size: 12px;
+  margin: 4px 0;
+}
+.csboard-stickers-container {
+  margin: 8px 0;
+}
+.csboard-stickers-title {
+  font-size: 12px;
+  color: #8f98a0;
+  margin-bottom: 4px;
+}
+.csboard-stickers-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.csboard-sticker-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: #c6d4df;
+}
+.csboard-sticker-slot img {
+  border-radius: 2px;
+}
+.csboard-sticker-slot img:hover {
+  transform: scale(1.5);
+}
+.csboard-sticker-price {
+  color: var(--steam-ingame-green);
+  font-size: 10px;
+}
+
+/* Doppler phase badge — top-left corner */
+.dopplerPhase {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 10px;
+  font-weight: bold;
+  text-shadow: 0 0 3px #000, 0 0 6px #000;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* Pattern indicator (Fade %, Marble Fade, Case Hardened blue %) */
+.patternIndicator {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: bold;
+  z-index: 3;
+  pointer-events: none;
+  font-family: var(--steam-old-font);
+}
+/* CSFloat exact: fade gradient */
+.patternIndicator.fadePercentage {
+  background-image: -webkit-linear-gradient(0deg, #d9bba5 0%, #e5903b 33%, #db5977 66%, #6775e1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.patternIndicator.marbleFade {
+  color: white;
+}
+.patternIndicator.caseHardened {
+  color: deepskyblue;
+}
+
+/* Lookup links in right panel */
+.csboard-lookup-links {
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.csboard-lookup-link {
+  display: block;
+  color: #67c1f5 !important;
+  text-decoration: none !important;
+  font-size: 12px;
+  padding: 3px 0;
+  font-family: var(--steam-old-font);
+}
+.csboard-lookup-link:hover {
+  color: #fff !important;
+  text-decoration: underline !important;
+}
+
+/* Sorting bar */
+#csboard-inv-sorting { height: 30px; font-size: 12px; color: #c6d4df; margin-bottom: 4px; }
+#csboard-inv-sorting select { margin-left: 4px; }
+
+/* Item marketplace links (hover overlay on trade_item) */
+.csboard-item-links {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: none;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(0,0,0,0.9);
+  padding: 2px;
+  z-index: 200;
+}
+.trade_item:hover .csboard-item-links {
+  display: flex;
+}
+.csboard-item-link {
+  color: #67c1f5;
+  font-size: 9px;
+  font-family: var(--steam-old-font);
+  text-decoration: none;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.csboard-item-link:hover {
+  background: rgba(103,193,245,0.2);
+  color: white;
+}
+
+/* Loading indicator */
+.csboard-loading {
+  color: #67c1f5;
+  font-size: 11px;
+  animation: csboard-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes csboard-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* Market search price overlay */
+.csboard-search-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--steam-old-font);
+  font-size: 11px;
+  margin-left: 8px;
+}
+.csboard-search-buff { color: #fbbf24; }
+.csboard-search-deal {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* Trade history prices */
+.csboard-history-price {
+  font-family: var(--steam-old-font);
+  font-size: 10px;
+  color: #8f98a0;
+  display: block;
+  margin-top: 2px;
+}
+
+/* Profile inventory value */
+.csboard-profile-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #1b2838;
+  border: 1px solid #4c5866;
+  border-radius: 4px;
+  padding: 8px 14px;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  color: #c6d4df;
+  margin: 4px 0;
+}

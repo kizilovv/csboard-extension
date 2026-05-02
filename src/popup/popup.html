@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSBOARD</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <div class="logo">CSBOARD</div>
+      <div class="header-actions">
+        <span id="status-dot" class="status-dot offline"></span>
+      </div>
+    </div>
+
+    <div id="screen-login" class="screen">
+      <div class="login-container">
+        <p class="login-text">Sign in on the CSBOARD website to sync your price source and currency. Price overlays work without signing in.</p>
+        <a id="login-btn" class="btn btn-primary" href="#" target="_blank">Open CSBOARD</a>
+        <p class="login-hint">After signing in, reopen this popup</p>
+      </div>
+    </div>
+
+    <div id="screen-main" class="screen hidden">
+      <div class="user-bar">
+        <img id="user-avatar" class="avatar" src="" alt="">
+        <div class="user-info">
+          <span id="user-name" class="user-name"></span>
+          <span id="user-badge" class="badge premium hidden">PREMIUM</span>
+        </div>
+      </div>
+
+      <div class="prices-status" id="prices-status">
+        <div class="prices-info">
+          <span id="prices-count">—</span>
+          <span class="prices-sep">·</span>
+          <span id="prices-updated">—</span>
+        </div>
+        <button id="refresh-prices-btn" class="btn btn-small">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="popup.ts"></script>
+</body>
+</html>
