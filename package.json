@@ -1,6 +1,6 @@
 {
   "name": "csboard-extension-prod",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CSBOARD price-overlay browser extension. Read-only price feeds for Steam Community pages and CSFloat.",
   "private": true,
   "scripts": {

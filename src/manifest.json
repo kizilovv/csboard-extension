@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CSBOARD",
-  "version": "1.0.1",
-  "description": "Multi-source CS2 price overlays for Steam community pages and CSFloat. Open source, no tracking.",
+  "version": "1.0.2",
+  "description": "Inline CS2 price comparison overlay for Steam Community and CSFloat marketplace pages.",
   "homepage_url": "https://csboard.com",
   "icons": {
     "16": "icons/icon16.png",
