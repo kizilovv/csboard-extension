@@ -64,8 +64,6 @@ The extension does **not** collect any of the following:
 |---|---|
 | `storage`, `unlimitedStorage` | Cache the ~4MB price database locally so the overlay renders instantly |
 | `alarms` | Schedule the 5-minute background refresh of the price database (`setTimeout` is unreliable in Manifest V3 service workers) |
-| `cookies` | Read your existing CSBOARD session cookie (csboard.com / csboard.trade only) to inherit your saved currency / price-source preferences. Cookies from no other domain are read |
-| `notifications` | **Disabled by default.** Optional opt-in price-drop alerts for items you explicitly add to a watchlist |
 | `declarativeNetRequestWithHostAccess` | Adjust response headers on steamcommunity.com so the content script's overlay can be injected past Steam's strict Content-Security-Policy. Scoped to steamcommunity.com only |
 | `host_permissions` (steamcommunity.com, store.steampowered.com, api.steampowered.com, csfloat.com, csboard.com, csboard.trade) | Inject the overlay on Steam Community / CSFloat pages and fetch the cached price database from CSBOARD. No other origins are accessed |
 
