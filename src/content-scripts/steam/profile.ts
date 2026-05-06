@@ -16,7 +16,6 @@
 // - priceEngine integration
 
 import { priceEngine } from '../../shared/price-engine';
-import { SITE_BASE } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
 
 const logger = createLogger('profile');
@@ -35,41 +34,11 @@ class ProfileScript {
     logger.info('Initializing profile page');
 
     await priceEngine.init();
-    this.addCSBoardButton();
     this.tryLoadInventoryValue();
   }
 
   destroy() {
     logger.debug('Profile script destroyed');
-  }
-
-  // --- Add CSBOARD Button ---
-
-  private addCSBoardButton() {
-    const profileHeader = document.querySelector('.profile_header, .profile_top_section');
-    if (!profileHeader) return;
-
-    const profileOwnerSteamId = this.getProfileSteamId();
-    if (!profileOwnerSteamId) return;
-
-    // Check if button already exists
-    if (profileHeader.querySelector('.csboard-profile-btn')) return;
-
-    const btnContainer = document.createElement('div');
-    btnContainer.className = 'csboard-profile-btn-container';
-    btnContainer.innerHTML = `
-      <a href="${SITE_BASE}/trader/${profileOwnerSteamId}" target="_blank" class="csboard-profile-btn">
-        View on CSBOARD
-      </a>
-    `;
-
-    // Insert near profile actions
-    const actions = profileHeader.querySelector('.profile_header_actions, [class*="action"]');
-    if (actions) {
-      actions.insertAdjacentElement('beforeend', btnContainer);
-    } else {
-      profileHeader.insertAdjacentElement('beforeend', btnContainer);
-    }
   }
 
   // --- Load Inventory Value ---
