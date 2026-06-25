@@ -219,7 +219,16 @@ function handleApiResponse(url: string, data: any): void {
 
   // /v1/listings/<id> — single popup item (item-detail GET)
   if (/\/v1\/listings\/[^/]+$/.test(path) && data?.id && data?.item?.market_hash_name) {
+    const prevId = popupItem?.id;
     popupItem = data as CSFListing;
+    // A new item-detail was fetched. If it's a different listing than the one
+    // we last rendered, drop the stale overlays + cached data and re-process so
+    // the page shows THIS item's price (CSFloat reuses the item-card DOM node on
+    // SPA navigation, so without this the first item's price sticks everywhere).
+    if (prevId !== popupItem.id) {
+      clearItemPageOverlays();
+      setTimeout(processAllCards, 0);
+    }
     return;
   }
 
@@ -351,13 +360,13 @@ function getItemData(card: Element): CSFListing | null {
   // --- Item-detail (popout / /item/:id main card) ---
   if (kind === CardKind.PAGE) {
     const wantedId = urlListingId();
-    let item: CSFListing | null = null;
-    if (popupItem && (!wantedId || popupItem.id === wantedId)) {
-      item = popupItem;
-    } else if (popupItem) {
-      // popupItem from a previous detail — accept anyway, better than nothing
-      item = popupItem;
-    }
+    // Only trust popupItem when it matches the URL's listing id. Accepting a
+    // stale popupItem from a previously-viewed item is what leaked one item's
+    // price onto every item. When the URL has an id and popupItem doesn't match
+    // yet, return null and let the retry loop pick it up once the correct
+    // /v1/listings/<id> response lands.
+    const item =
+      popupItem && (wantedId ? popupItem.id === wantedId : true) ? popupItem : null;
     if (item) {
       card.classList.add('item-' + item.id);
       card.setAttribute('data-csboard', JSON.stringify(item));
@@ -524,8 +533,9 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
 // CSBOARD panel — item-detail page only (BetterFloat-style)
 // ============================================================
 // On a CSFloat item page (item-detail), inject a CSBOARD price + buy CTA
-// panel beneath the Buff line. Deep-links to /items/s/<slug> so the user
-// jumps straight to the same skin on CSBOARD. Grid/similar/sell cards stay
+// panel beneath the Buff line. Deep-links to /en/items/<slug>?mode=buy so the
+// user jumps straight to the same skin on CSBOARD. Only shown when CSBOARD is
+// competitive (not pricier than the CSFloat ask). Grid/similar/sell cards stay
 // Buff-line-only to avoid clutter.
 function injectCsboardPanel(card: Element, listing: CSFListing): void {
   if (detectCardKind(card) !== CardKind.PAGE) return;
@@ -537,23 +547,28 @@ function injectCsboardPanel(card: Element, listing: CSFListing): void {
   const price = priceEngine.getPrice(marketHashName, phase);
   if (!price) return; // no price → no blank panel
 
+  // Delta vs the CSFloat ask — both USD cents, so currency-neutral. buy_now only
+  // (auctions have no fixed ask to compare against).
+  const csfCents = listing.price;
+  const isAuction = listing.type === 'auction' || !!listing.auction_details;
+  const comparable = !isAuction && csfCents > 0 && price.cents > 0;
+
+  // Only advertise CSBOARD when it's competitive — don't show the panel when our
+  // price is HIGHER than the CSFloat ask. When there's nothing to compare
+  // (auction / missing ask), still show it (CTA value, no misleading "higher").
+  if (comparable && price.cents > csfCents) return;
+
   const href = getCsboardLink(marketHashName, phase);
   // Show CSBOARD price in CSFloat's page currency (matches the Buff line + the
   // price the user sees on the page) rather than the extension currency setting.
   const priceDisplay = formatCsfPrice(price.cents).display;
 
-  // Delta vs the CSFloat ask — both USD cents, so currency-neutral. buy_now
-  // only (auctions have no fixed ask).
   let deltaHtml = '';
-  const csfCents = listing.price;
-  const isAuction = listing.type === 'auction' || !!listing.auction_details;
-  if (!isAuction && csfCents > 0 && price.cents > 0) {
+  if (comparable) {
     const diffPct = Math.abs(100 - (csfCents / price.cents) * 100);
     if (diffPct >= 0.5) {
-      const cheaperOnCsboard = price.cents < csfCents;
-      const color = cheaperOnCsboard ? '#3fb950' : '#ce0000';
-      const word = cheaperOnCsboard ? 'cheaper' : 'higher';
-      deltaHtml = `<span class="csboard-panel-delta" style="color:${color};">${diffPct.toFixed(diffPct > 150 ? 0 : 1)}% ${word}</span>`;
+      // price.cents <= csfCents here (higher already bailed) → always "cheaper".
+      deltaHtml = `<span class="csboard-panel-delta" style="color:#3fb950;">${diffPct.toFixed(diffPct > 150 ? 0 : 1)}% cheaper</span>`;
     }
   }
 
@@ -1212,6 +1227,9 @@ async function initUI() {
   setInterval(async () => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      // Drop the previous item's overlays immediately so a slow new fetch never
+      // leaves the old price on screen.
+      clearItemPageOverlays();
       if (isSellPage()) {
         inventoryItems = [];
         await ensureInventoryLoaded();
@@ -1220,6 +1238,22 @@ async function initUI() {
       setTimeout(processAllCards, 1000);
     }
   }, 1000);
+}
+
+// Remove our injected overlays + cached listing data from item-detail cards.
+// CSFloat reuses the <item-card> DOM node across SPA navigations, so the
+// .csboard-buff-a dedupe guard + the cached data-csboard attribute would
+// otherwise pin the first viewed item's price onto every later item.
+function clearItemPageOverlays(): void {
+  document
+    .querySelectorAll('.csboard-buff-a, .csboard-panel, .csboard-sale-tag')
+    .forEach((el) => el.remove());
+  document.querySelectorAll('item-card[data-csboard]').forEach((card) => {
+    card.removeAttribute('data-csboard');
+    Array.from(card.classList)
+      .filter((c) => c.startsWith('item-'))
+      .forEach((c) => card.classList.remove(c));
+  });
 }
 
 if (document.readyState === 'loading') {
