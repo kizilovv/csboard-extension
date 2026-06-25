@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "CSBOARD",
-  "version": "1.0.4",
+  "name": "CSBoard - Tool For CS2 Trading",
+  "version": "1.0.6",
   "description": "Inline CS2 price comparison overlay for Steam Community and CSFloat marketplace pages.",
   "homepage_url": "https://csboard.com",
   "icons": {

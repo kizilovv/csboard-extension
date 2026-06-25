@@ -36,6 +36,27 @@ const COMPACT_KEY_MAP: Record<PriceSourceKey, keyof CompactPrice> = {
   lisskins: 'ls',
 };
 
+// When a Doppler phase row lacks the user's chosen source, fall back across
+// these sources WITHIN the same phase row before resorting to the base row.
+// buff163 ships no per-phase data in our pipeline (only dmarket/youpin price
+// phases), so without this a phase knife silently uses the phase-blended base
+// buff price — e.g. M9 Doppler Phase 2 shown at the $869 blended figure instead
+// of its real ~$1248. A phase-correct price from any source beats a
+// phase-blended one from the preferred source.
+const PHASE_SOURCE_FALLBACK: (keyof CompactPrice)[] = ['b', 'cf', 'dm', 'sp', 'yp', 'ls', 's'];
+
+// Pick a usable price (cents) from a Doppler phase row: preferred source first,
+// then the fallback chain. Returns null only if the row has no priced source.
+function pickPhaseCents(row: CompactPrice, preferred: keyof CompactPrice): number | null {
+  const p = row[preferred];
+  if (p && p > 0) return p;
+  for (const k of PHASE_SOURCE_FALLBACK) {
+    const c = row[k];
+    if (c && c > 0) return c;
+  }
+  return null;
+}
+
 // Currency data — same as cs2trader
 export interface CurrencyInfo {
   short: string;
@@ -182,18 +203,18 @@ class PriceEngine {
    * know whether the hit was exact.
    */
   getPrice(marketHashName: string, dopplerPhase?: string): FormattedPrice | null {
-    // Try phase-specific price first for Doppler items
+    const key = COMPACT_KEY_MAP[this.settings.priceSource];
+
+    // Doppler: the phase-specific row wins. Within that row, fall back across
+    // sources (preferred → PHASE_SOURCE_FALLBACK) so we never drop to the
+    // phase-blended base price when the phase is known. See PHASE_SOURCE_FALLBACK.
     if (dopplerPhase) {
-      const phaseKey = `${marketHashName} - ${dopplerPhase}`;
-      const phaseItem = this.prices[phaseKey];
+      const phaseItem = this.prices[`${marketHashName} - ${dopplerPhase}`];
       if (phaseItem) {
-        const key = COMPACT_KEY_MAP[this.settings.priceSource];
-        const cents = phaseItem[key];
-        if (cents && cents > 0) return this.formatPrice(cents);
+        const cents = pickPhaseCents(phaseItem, key);
+        if (cents) return this.formatPrice(cents);
       }
     }
-
-    const key = COMPACT_KEY_MAP[this.settings.priceSource];
 
     const exact = this.prices[marketHashName];
     if (exact) {

@@ -344,7 +344,7 @@ class TradeOffersListScript {
 
         el.setAttribute('data-market-hash-name', item.market_hash_name);
 
-        // Add marketplace links (BUFF, CSFloat, Pricempire) — inject into Steam's popup
+        // Add marketplace links (BUFF, CSFloat) — inject into Steam's popup
         const linksHtml = `
           <a class="csboard-item-link" href="${getBuffLink(item.market_hash_name)}" target="_blank">BUFF</a>
           <a class="csboard-item-link" href="${getCsFloatLink(item.market_hash_name)}" target="_blank">CSFloat</a>

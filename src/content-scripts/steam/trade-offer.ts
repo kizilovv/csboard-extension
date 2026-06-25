@@ -23,7 +23,7 @@ import {
   addFloatIndicator, addSSTandExtIndicators, addDopplerPhase,
   addPatternIndicator,
   resizeTradeProtectionIcon, makeItemColorful, addTradeHoldBadge,
-  parseTradability, getBuffLink, getCsFloatLink,
+  parseTradability, getBuffLink, getCsFloatLink, getCsboardLink,
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
@@ -470,6 +470,31 @@ const rebuildCombinedLookup = (): void => {
   }
 };
 
+// Extract Steam icon hash from a trade-slot element so fallback price lookups
+// can still resolve Doppler-phase rows in pe:prices. Steam renders the icon as
+// a CSS background-image on either the slot itself or a child div; sometimes
+// a plain <img> is used. Returns the hash (the path segment Steam keys by) or
+// undefined if no icon URL is present.
+const extractIconHashFromElement = (el: HTMLElement): string | undefined => {
+  const URL_RE = /economy\/image\/([A-Za-z0-9_-]+)/;
+  const bgSelf = el.style?.backgroundImage;
+  if (bgSelf) {
+    const m = URL_RE.exec(bgSelf);
+    if (m) return m[1];
+  }
+  const inner = el.querySelector('[style*="background-image"]') as HTMLElement | null;
+  if (inner?.style?.backgroundImage) {
+    const m = URL_RE.exec(inner.style.backgroundImage);
+    if (m) return m[1];
+  }
+  const img = el.querySelector('img') as HTMLImageElement | null;
+  if (img?.src) {
+    const m = URL_RE.exec(img.src);
+    if (m) return m[1];
+  }
+  return undefined;
+};
+
 const addPerItemInfo = (_inventoryOwnerID?: string): void => {
   // Get ALL CS2 item elements on the page (inventory + trade slots)
   // On trade offer pages, item elements have IDs like "item730_2_ASSETID"
@@ -518,10 +543,17 @@ const addPerItemInfo = (_inventoryOwnerID?: string): void => {
     if (!item) {
       const nameAttr = el.getAttribute('data-market-hash-name');
       if (nameAttr) {
-        const priceData = priceEngine.getPrice(nameAttr);
-        const buffPrices = priceEngine.getBuffPrices(nameAttr);
+        // Pull icon hash off the slot so Doppler items resolve their phase row
+        // instead of falling through to the base name (which prices the wrong
+        // phase — Phase 1 trades 2× a Phase 4 for the same skin).
+        const iconHash = extractIconHashFromElement(el);
+        const dopplerPhase = iconHash ? getDopplerInfo(iconHash)?.name : undefined;
+        const priceData = priceEngine.getPrice(nameAttr, dopplerPhase);
+        const buffPrices = priceEngine.getBuffPrices(nameAttr, dopplerPhase);
         if (priceData) {
           item = { price: { price: priceData.raw, display: priceData.display }, market_hash_name: nameAttr };
+          if (iconHash) item.iconURL = iconHash;
+          if (dopplerPhase) item.dopplerPhase = dopplerPhase;
           if (buffPrices.buyOrder) {
             item.buffBid = { price: buffPrices.buyOrder.raw, display: buffPrices.buyOrder.display };
           }
@@ -539,10 +571,14 @@ const addPerItemInfo = (_inventoryOwnerID?: string): void => {
         if (classid) {
           const itemName = descriptionCache[`${classid}_${instanceid}`] || descriptionCache[`${classid}_0`];
           if (itemName) {
-            const priceData = priceEngine.getPrice(itemName);
-            const buffPrices = priceEngine.getBuffPrices(itemName);
+            const iconHash = extractIconHashFromElement(el);
+            const dopplerPhase = iconHash ? getDopplerInfo(iconHash)?.name : undefined;
+            const priceData = priceEngine.getPrice(itemName, dopplerPhase);
+            const buffPrices = priceEngine.getBuffPrices(itemName, dopplerPhase);
             if (priceData) {
               item = { price: { price: priceData.raw, display: priceData.display }, market_hash_name: itemName };
+              if (iconHash) item.iconURL = iconHash;
+              if (dopplerPhase) item.dopplerPhase = dopplerPhase;
               if (buffPrices.buyOrder) {
                 item.buffBid = { price: buffPrices.buyOrder.raw, display: buffPrices.buyOrder.display };
               }
@@ -554,9 +590,10 @@ const addPerItemInfo = (_inventoryOwnerID?: string): void => {
 
     if (!item) return;
 
-    // Ensure buffBid is always set (partner items from rgInventory may lack it)
+    // Ensure buffBid is always set (partner items from rgInventory may lack it).
+    // Pass dopplerPhase so the refresh stays phase-correct for Doppler items.
     if (!item.buffBid && item.market_hash_name) {
-      const buffPrices = priceEngine.getBuffPrices(item.market_hash_name);
+      const buffPrices = priceEngine.getBuffPrices(item.market_hash_name, item.dopplerPhase);
       if (buffPrices.buyOrder) {
         item.buffBid = { price: buffPrices.buyOrder.raw, display: buffPrices.buyOrder.display };
       } else if (item.price) {
@@ -1287,7 +1324,7 @@ const getInventories = (initial: boolean): void => {
 };
 
 // ============================================================
-// Context Menu (BUFF, CSFloat, Pricempire)
+// Context Menu (BUFF, CSFloat, CSBOARD)
 // ============================================================
 
 const setupContextMenu = (): void => {
@@ -1342,8 +1379,8 @@ const showContextMenu = (x: number, y: number, marketName: string): void => {
     <a class="csboard-ctx-item" href="https://csfloat.com/search?market_hash_name=${encodedName}" target="_blank">
       <span class="csboard-ctx-icon">F</span> Lookup on CSFloat
     </a>
-    <a class="csboard-ctx-item" href="https://pricempire.com/item/cs2/${encodedName}" target="_blank">
-      <span class="csboard-ctx-icon">P</span> Lookup on Pricempire
+    <a class="csboard-ctx-item" href="${getCsboardLink(marketName)}" target="_blank">
+      <span class="csboard-ctx-icon">C</span> View on CSBOARD
     </a>
   `;
 
@@ -1516,7 +1553,7 @@ async function init() {
   // 4. Setup trade event listeners (CSBoard specific)
   setupTradeEventListeners();
 
-  // 5. Context menu (BUFF, CSFloat, Pricempire) — always works even without inventories
+  // 5. Context menu (BUFF, CSFloat, CSBOARD) — always works even without inventories
   setupContextMenu();
 
   // 6. MAIN: getInventories(true) — loads both inventories, enriches with prices, adds to DOM

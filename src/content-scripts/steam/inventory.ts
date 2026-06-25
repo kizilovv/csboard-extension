@@ -19,7 +19,7 @@ import {
   getIDsFromElement, getItemByIDs, addPriceIndicator,
   addFloatIndicator, addSSTandExtIndicators, resizeTradeProtectionIcon,
   makeItemColorful, addTradeHoldBadge, parseTradability, addDopplerPhase,
-  addPatternIndicator, getBuffLink, getCsFloatLink,
+  addPatternIndicator, getBuffLink, getCsFloatLink, getCsboardLink,
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
@@ -420,7 +420,7 @@ const ensureHeaderBar = (): HTMLElement | null => {
 };
 
 // ============================================================
-// Context menu for inventory items (BUFF, CSFloat, Pricempire)
+// Context menu for inventory items (BUFF, CSFloat, CSBOARD)
 // ============================================================
 
 const setupContextMenu = (): void => {
@@ -472,8 +472,8 @@ const setupContextMenu = (): void => {
       <a class="csboard-ctx-item" href="${getCsFloatLink(name, { defIndex: foundItem?.defIndex, paintIndex: foundItem?.paintIndex, dopplerPhase: dPhase })}" target="_blank">
         <span class="csboard-ctx-icon">F</span> Lookup on CSFloat
       </a>
-      <a class="csboard-ctx-item" href="https://pricempire.com/item/cs2/${encodeURIComponent(name)}" target="_blank">
-        <span class="csboard-ctx-icon">P</span> Lookup on Pricempire
+      <a class="csboard-ctx-item" href="${getCsboardLink(name, dPhase)}" target="_blank">
+        <span class="csboard-ctx-icon">C</span> View on CSBOARD
       </a>
     `;
 
@@ -830,7 +830,7 @@ const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
     paintIndex: item?.paintIndex,
     dopplerPhase: dPhase,
   });
-  const pricempireHref = `https://pricempire.com/item/cs2/${encodeURIComponent(itemName)}`;
+  const csboardHref = getCsboardLink(itemName, dPhase);
 
   const block = document.createElement('div');
   block.className = 'csboard-lookup-inline';
@@ -839,7 +839,7 @@ const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
   block.innerHTML = `
     <a href="${buffHref}" target="_blank" rel="noopener" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Buff</a>
     <a href="${csfloatHref}" target="_blank" rel="noopener" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">CSFloat</a>
-    <a href="${pricempireHref}" target="_blank" rel="noopener" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">Pricempire</a>
+    <a href="${csboardHref}" target="_blank" rel="noopener" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">CSBOARD</a>
   `;
   return block;
 };
@@ -900,7 +900,7 @@ const setupItemClickListener = (): void => {
 // Standalone observer for the Lookup block — independent of the legacy
 // addRightSideElements path (which only runs on the old #iteminfo0/#iteminfo1
 // UI). When Steam swaps the right item panel — old or new UI — the next
-// matching CS2 game-icon row gets a fresh Buff/CSFloat/Pricempire block.
+// matching CS2 game-icon row gets a fresh Buff/CSFloat/CSBOARD block.
 const setupLookupObserver = (): void => {
   let scheduled = false;
   const schedule = () => {
@@ -954,7 +954,12 @@ const addRightSideElements = (): void => {
 
   // Find item in our data
   const item = items.find((i: any) => i.market_hash_name === itemName || i.name === itemName);
-  const price = priceEngine.getPrice(itemName);
+  // Pull Doppler phase off the cached item so detail panel resolves the
+  // phase-specific row instead of a base-name miss (which silently averages
+  // across all phases and prices the wrong one).
+  const iconForPhase = item?.iconURL as string | undefined;
+  const detailPhase = iconForPhase ? getDopplerInfo(iconForPhase)?.name : undefined;
+  const price = priceEngine.getPrice(itemName, detailPhase);
   const settings = priceEngine.getSettings();
 
   // Build upper module HTML
@@ -1244,7 +1249,7 @@ async function init() {
   // 5. Item click handler for detail panel
   setupItemClickListener();
 
-  // 5b. Standalone observer that injects Buff/CSFloat/Pricempire links into
+  // 5b. Standalone observer that injects Buff/CSFloat/CSBOARD links into
   //     the right item panel — works for both the old and new Steam UIs.
   setupLookupObserver();
 

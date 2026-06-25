@@ -5,6 +5,10 @@
 // These are the core item lookup/matching utilities used everywhere.
 
 import { getDopplerInfo as getDopplerInfoByIcon } from './dopplerPhases';
+import { SITE_BASE } from './config';
+import { createLogger } from './logger';
+
+const logger = createLogger('items');
 
 /**
  * Find a DOM element by app/context/asset IDs.
@@ -110,6 +114,16 @@ export const getExteriorShort = (tags: any[] | undefined): string | null => {
 };
 
 /**
+ * Truncate (floor) a float to N decimal places without rounding up.
+ * `0.0099680` → "0.0099" at 4 digits, so the badge never crosses a wear
+ * boundary the way `toFixed` rounding would (`0.0100`).
+ */
+export const truncateFloat = (value: number, digits: number): string => {
+  const factor = 10 ** digits;
+  return (Math.floor(value * factor) / factor).toFixed(digits);
+};
+
+/**
  * Add float indicator to item element.
  * cs2trader exact: .floatIndicator positioned above .priceIndicator
  */
@@ -126,7 +140,7 @@ export const addFloatIndicator = (
 
   itemElement.insertAdjacentHTML(
     'beforeend',
-    `<div class="floatIndicator">${fv.toFixed(digits)}</div>`,
+    `<div class="floatIndicator">${truncateFloat(fv, digits)}</div>`,
   );
 };
 
@@ -229,6 +243,20 @@ export const getCsFloatLink = (marketHashName: string, opts?: { defIndex?: numbe
     mhn += ` [${opts.dopplerPhase}]`;
   }
   return `https://csfloat.com/search?market_hash_name=${encodeURIComponent(mhn)}`;
+};
+
+export const getCsboardLink = (marketHashName: string, dopplerPhase?: string): string => {
+  // Deep-link to the CSBOARD item page. Slug must mirror the backend
+  // ItemSearchService slugify exactly so the route resolves.
+  let name = marketHashName;
+  if (dopplerPhase) name += ` [${dopplerPhase}]`;
+  const slug = name
+    .toLowerCase()
+    .replace(/[()]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${SITE_BASE}/items/s/${slug}`;
 };
 
 // ============================================================
@@ -422,6 +450,51 @@ export const makeItemColorful = (
 // ============================================================
 
 /**
+ * Parse a Steam hold-date string into a Date.
+ * Handles three live formats (in priority order):
+ *   - "...[date]1751274000[/date]" — machine-readable unix-seconds token Steam now
+ *      embeds in owner_descriptions (locale-proof). The human "6/30/2026, 9:00:00 AM"
+ *      is only the rendered form of this token. PRIMARY path — matches upstream
+ *      csgo-trader (contentScripts/steam/inventory.js).
+ *   - "6/30/2026, 9:00:00 AM"   — new trade-protection format (M/D/YYYY, 12h AM/PM)
+ *   - "Mar 31, 2026 7:00:00 GMT" — Tradable/Marketable After ... (parens already stripped)
+ * Returns null if none parse, so the caller can surface a visible '?' badge.
+ */
+const parseSteamHoldDate = (raw: string): Date | null => {
+  // Machine-readable unix-seconds token wins — no locale/format ambiguity.
+  const token = raw.match(/\[date\](\d+)\[\/date\]/);
+  if (token) {
+    const d = new Date(parseInt(token[1]!, 10) * 1000);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  const s = raw.replace(/^[\s⇆]+/, '').trim();
+
+  // New format: M/D/YYYY, h:mm:ss AM/PM (comma + 12h clock parse to Invalid Date
+  // in many engines, so build the Date explicitly).
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?/i);
+  if (m) {
+    const month = parseInt(m[1]!, 10);
+    const day = parseInt(m[2]!, 10);
+    const year = parseInt(m[3]!, 10);
+    let hour = parseInt(m[4]!, 10);
+    const min = parseInt(m[5]!, 10);
+    const sec = parseInt(m[6]!, 10);
+    const ampm = m[7]?.toUpperCase();
+    if (ampm === 'PM' && hour !== 12) hour += 12;
+    else if (ampm === 'AM' && hour === 12) hour = 0;
+    const d = new Date(year, month - 1, day, hour, min, sec);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // Fallback: the engine's own parser handles "Mar 31, 2026 7:00:00 GMT" etc.
+  const d2 = new Date(s);
+  if (!isNaN(d2.getTime())) return d2;
+
+  return null;
+};
+
+/**
  * Parse tradability from item descriptions/owner_descriptions.
  * Returns { tradability, tradabilityShort, daysRemaining }
  */
@@ -434,20 +507,26 @@ export const parseTradability = (
   // Looks for "Tradable/Marketable After DATE" or "transferred until DATE"
   if (tradable === 0) {
     const ownerDescs = ownerDescriptions || [];
+    let sawHoldText = false; // matched a hold message but couldn't parse its date
     for (const desc of ownerDescs) {
       const val = typeof desc === 'string' ? desc : desc?.value || '';
       if (!/\d/.test(val)) continue; // must contain a digit (date)
       try {
         let dateStr = '';
         if (val.includes('transferred until')) {
+          // "...transferred until [date]1751274000[/date]" (new) or "...until 6/30/2026, 9:00:00 AM"
           dateStr = val.split('transferred until ')[1]?.replace(/[()]/g, '') || '';
         } else if (val.includes('Tradable') || val.includes('Marketable')) {
           // "Tradable/Marketable After Mar 31, 2026 (7:00:00) GMT"
           dateStr = val.split(/After\s+/)[1]?.replace(/[()]/g, '') || '';
+        } else if (val.includes('[date]')) {
+          // Bare unix token with no prefix (community-market purchase hold).
+          dateStr = val;
         }
         if (dateStr) {
-          const holdEnd = new Date(dateStr.trim());
-          if (!isNaN(holdEnd.getTime())) {
+          sawHoldText = true;
+          const holdEnd = parseSteamHoldDate(dateStr);
+          if (holdEnd) {
             const now = new Date();
             const distance = holdEnd.getTime() - now.getTime();
             if (distance <= 0) {
@@ -460,12 +539,20 @@ export const parseTradability = (
             if (days > 0) short = `${days}d`;
             else if (hours > 0) short = `${hours}h`;
             else short = '<1h';
-            return { tradability: dateStr, tradabilityShort: short, daysRemaining: days };
+            return { tradability: dateStr.trim(), tradabilityShort: short, daysRemaining: days };
           }
+          // Matched a hold message but the date didn't parse — log so a future
+          // Steam format change is visible instead of silently mislabelled.
+          logger.warn('parseTradability: could not parse hold date', { raw: val, dateStr });
         }
       } catch { /* ignore parse errors */ }
     }
-    return { tradability: 'Tradelocked', tradabilityShort: 'L', daysRemaining: 0 };
+    // '?' (not 'L') when we saw a hold message we couldn't parse — surfaces drift.
+    return {
+      tradability: 'Tradelocked',
+      tradabilityShort: sawHoldText ? '?' : 'L',
+      daysRemaining: 0,
+    };
   }
   return { tradability: 'Tradable', tradabilityShort: '', daysRemaining: 0 };
 };
