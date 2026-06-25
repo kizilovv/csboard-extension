@@ -133,7 +133,8 @@
     {
       "resources": [
         "injectToPage/csfloatInterceptor.js",
-        "icons/buff163.png"
+        "icons/buff163.png",
+        "icons/icon128.png"
       ],
       "matches": [
         "https://csfloat.com/*"

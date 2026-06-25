@@ -13,7 +13,7 @@
 // All prices from local cache — zero external API calls.
 
 import { priceEngine, CURRENCIES } from '../../shared/price-engine';
-import { getBuffLink } from '../../shared/items';
+import { getBuffLink, getCsboardLink } from '../../shared/items';
 import { createLogger } from '../../shared/logger';
 
 const logger = createLogger('csfloat');
@@ -394,6 +394,7 @@ function getItemData(card: Element): CSFListing | null {
 // Real Buff163 favicon, bundled with the extension. Listed in
 // `web_accessible_resources` for csfloat.com so the page can load it.
 const BUFF_ICON = chrome.runtime.getURL('icons/buff163.png');
+const CSBOARD_ICON = chrome.runtime.getURL('icons/icon128.png');
 
 // Throttled miss-logger — prints each unmatched name once per page so you can see
 // in DevTools which items our price blob doesn't cover (new items / name mismatch).
@@ -517,6 +518,63 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
 
   const priceParent = priceEl.parentElement || priceEl;
   priceParent.insertAdjacentElement('afterend', buffLine);
+}
+
+// ============================================================
+// CSBOARD panel — item-detail page only (BetterFloat-style)
+// ============================================================
+// On a CSFloat item page (item-detail), inject a CSBOARD price + buy CTA
+// panel beneath the Buff line. Deep-links to /items/s/<slug> so the user
+// jumps straight to the same skin on CSBOARD. Grid/similar/sell cards stay
+// Buff-line-only to avoid clutter.
+function injectCsboardPanel(card: Element, listing: CSFListing): void {
+  if (detectCardKind(card) !== CardKind.PAGE) return;
+  if (card.querySelector('.csboard-panel')) return;
+
+  const marketHashName = listing.item.market_hash_name;
+  const phase = listing.item.phase;
+
+  const price = priceEngine.getPrice(marketHashName, phase);
+  if (!price) return; // no price → no blank panel
+
+  const href = getCsboardLink(marketHashName, phase);
+  // Show CSBOARD price in CSFloat's page currency (matches the Buff line + the
+  // price the user sees on the page) rather than the extension currency setting.
+  const priceDisplay = formatCsfPrice(price.cents).display;
+
+  // Delta vs the CSFloat ask — both USD cents, so currency-neutral. buy_now
+  // only (auctions have no fixed ask).
+  let deltaHtml = '';
+  const csfCents = listing.price;
+  const isAuction = listing.type === 'auction' || !!listing.auction_details;
+  if (!isAuction && csfCents > 0 && price.cents > 0) {
+    const diffPct = Math.abs(100 - (csfCents / price.cents) * 100);
+    if (diffPct >= 0.5) {
+      const cheaperOnCsboard = price.cents < csfCents;
+      const color = cheaperOnCsboard ? '#3fb950' : '#ce0000';
+      const word = cheaperOnCsboard ? 'cheaper' : 'higher';
+      deltaHtml = `<span class="csboard-panel-delta" style="color:${color};">${diffPct.toFixed(diffPct > 150 ? 0 : 1)}% ${word}</span>`;
+    }
+  }
+
+  const panel = document.createElement('a');
+  panel.className = 'csboard-panel';
+  panel.href = href;
+  panel.target = '_blank';
+  panel.rel = 'noopener';
+  panel.title = `View ${marketHashName} on CSBOARD`;
+  panel.innerHTML = `
+    <img class="csboard-panel-logo" src="${CSBOARD_ICON}" />
+    <span class="csboard-panel-price">${priceDisplay}</span>
+    ${deltaHtml}
+    <span class="csboard-panel-cta">View on CSBOARD →</span>
+  `;
+
+  // Mount below the Buff line if present, else after the price row.
+  const priceEl = card.querySelector('.price-row') || card.querySelector('.price');
+  const anchor = card.querySelector('.csboard-buff-a') || priceEl?.parentElement || priceEl;
+  if (anchor) anchor.insertAdjacentElement('afterend', panel);
+  else card.appendChild(panel);
 }
 
 // ============================================================
@@ -665,6 +723,7 @@ function processCard(card: Element): void {
       const listing = getItemData(card);
       if (listing) {
         injectPriceOverlay(card, listing);
+        injectCsboardPanel(card, listing);
       } else if (retries++ < 6) {
         setTimeout(retry, 500);
       }
@@ -673,6 +732,7 @@ function processCard(card: Element): void {
     return;
   }
   injectPriceOverlay(card, listing);
+  injectCsboardPanel(card, listing);
 }
 
 function processAllCards(): void {
@@ -782,6 +842,46 @@ function injectStyles(): void {
     .csboard-buffprice {
       margin-left: 2px;
       padding-top: 1px;
+    }
+
+    /* CSBOARD panel — item-detail page CTA below the Buff line */
+    .csboard-panel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      margin-top: 6px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--module-background-color, #20272e);
+      border: 1px solid rgba(125, 185, 232, 0.25);
+      font-size: 14px;
+      text-decoration: none !important;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .csboard-panel:hover {
+      border-color: rgba(125, 185, 232, 0.6);
+      background: var(--hover-color, #283038);
+    }
+    .csboard-panel-logo {
+      height: 18px;
+      width: 18px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .csboard-panel-price {
+      color: #e6edf3;
+      font-weight: 600;
+    }
+    .csboard-panel-delta {
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .csboard-panel-cta {
+      color: #7db9e8;
+      font-weight: 500;
+      margin-left: 2px;
     }
 
     /* Difference badge — 2-row layout, inline next to CSFloat price */
