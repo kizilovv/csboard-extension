@@ -233,30 +233,50 @@ export const getBuffLink = (marketHashName: string, _dopplerPhase?: string): str
 };
 
 export const getCsFloatLink = (marketHashName: string, opts?: { defIndex?: number; paintIndex?: number; dopplerPhase?: string }): string => {
-  // Best: def_index + paint_index (from protobuf decode) — exact CSFloat search
-  if (opts?.defIndex && opts?.paintIndex) {
-    return `https://csfloat.com/search?def_index=${opts.defIndex}&paint_index=${opts.paintIndex}`;
-  }
-  // Fallback: market_hash_name with [Phase X] suffix (csfloat-extension pattern)
+  // market_hash_name is the primary key — it carries the wear (e.g.
+  // "(Minimal Wear)") + StatTrak™/Souvenir, so CSFloat lands on the exact wear.
+  // def_index/paint_index alone collapse to ALL wears of the skin, so they're
+  // added only as extra precision params, never instead of the name.
   let mhn = marketHashName;
   if (opts?.dopplerPhase) {
     mhn += ` [${opts.dopplerPhase}]`;
   }
-  return `https://csfloat.com/search?market_hash_name=${encodeURIComponent(mhn)}`;
+  let url = `https://csfloat.com/search?market_hash_name=${encodeURIComponent(mhn)}`;
+  if (opts?.defIndex && opts?.paintIndex) {
+    url += `&def_index=${opts.defIndex}&paint_index=${opts.paintIndex}`;
+  }
+  return url;
 };
 
 export const getCsboardLink = (marketHashName: string, dopplerPhase?: string): string => {
-  // Deep-link to the CSBOARD item page. Slug must mirror the backend
-  // ItemSearchService slugify exactly so the route resolves.
+  // Deep-link to the CSBOARD item page: /en/items/<slug>?mode=buy.
+  // The slug is slugify(full market_hash_name) — it MUST keep the wear suffix
+  // ("(Minimal Wear)") and the StatTrak™/Souvenir prefix, e.g.
+  //   "StatTrak™ M4A1-S | Bright Water (Minimal Wear)"
+  //   → stattrak-m4a1-s-bright-water-minimal-wear
+  // so pass the canonical market_hash_name here, NOT a DOM-scraped base name.
+  // Mirrors the backend ItemSearchService slugify exactly so the route resolves.
   let name = marketHashName;
-  if (dopplerPhase) name += ` [${dopplerPhase}]`;
+  if (dopplerPhase) {
+    // CSBOARD weaves the phase into the name BEFORE the wear, e.g.
+    // "★ M9 Bayonet | Doppler (Factory New)" + "Black Pearl"
+    //   → "...-doppler-black-pearl-factory-new". Insert after "Doppler".
+    if (/Doppler\s*\(/.test(name)) {
+      name = name.replace(/(Doppler)(\s*\()/, `$1 ${dopplerPhase}$2`);
+    } else if (/Doppler\b/.test(name)) {
+      name = name.replace(/(Doppler)\b/, `$1 ${dopplerPhase}`);
+    } else {
+      name += ` ${dopplerPhase}`;
+    }
+  }
   const slug = name
     .toLowerCase()
+    .replace(/™/g, '')
     .replace(/[()]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
-  return `${SITE_BASE}/items/s/${slug}`;
+  return `${SITE_BASE}/en/items/${slug}?mode=buy`;
 };
 
 // ============================================================

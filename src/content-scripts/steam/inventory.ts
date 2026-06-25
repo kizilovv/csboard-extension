@@ -824,13 +824,17 @@ const findLookupAnchors = (): LookupAnchor[] => {
 
 const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
   const dPhase = item?.dopplerPhase as string | undefined;
-  const buffHref = getBuffLink(itemName, dPhase);
-  const csfloatHref = getCsFloatLink(itemName, {
+  // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
+  // Souvenir) — the DOM-scraped `itemName` is the display title and often drops
+  // the wear/quality, which produced wear-less Buff/CSFloat/CSBOARD links.
+  const linkName = (item?.market_hash_name as string) || itemName;
+  const buffHref = getBuffLink(linkName, dPhase);
+  const csfloatHref = getCsFloatLink(linkName, {
     defIndex: item?.defIndex,
     paintIndex: item?.paintIndex,
     dopplerPhase: dPhase,
   });
-  const csboardHref = getCsboardLink(itemName, dPhase);
+  const csboardHref = getCsboardLink(linkName, dPhase);
 
   const block = document.createElement('div');
   block.className = 'csboard-lookup-inline';
