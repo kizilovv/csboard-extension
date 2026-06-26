@@ -221,13 +221,12 @@ function handleApiResponse(url: string, data: any): void {
   if (/\/v1\/listings\/[^/]+$/.test(path) && data?.id && data?.item?.market_hash_name) {
     const prevId = popupItem?.id;
     popupItem = data as CSFListing;
-    // A new item-detail was fetched. If it's a different listing than the one
-    // we last rendered, drop the stale overlays + cached data and re-process so
-    // the page shows THIS item's price (CSFloat reuses the item-card DOM node on
-    // SPA navigation, so without this the first item's price sticks everywhere).
+    // A new item-detail was fetched → sync the detail card (idempotent, so the
+    // retries below just catch the card if it renders slightly after the fetch).
     if (prevId !== popupItem.id) {
-      clearItemPageOverlays();
-      setTimeout(processAllCards, 0);
+      syncDetailCard();
+      setTimeout(syncDetailCard, 300);
+      setTimeout(syncDetailCard, 800);
     }
     return;
   }
@@ -278,6 +277,58 @@ function parseCardDOM(card: Element): { name: string; float?: number } | null {
   return { name, float: float && !isNaN(float) ? float : undefined };
 }
 
+// Build a full listing from the DOM (BetterFloat getFloatItem pattern). Used on
+// the /item/<id> page + popout, where CSFloat may NOT fire a single
+// /v1/listings/<id> GET (data carried from the grid) so popupItem is unset.
+// Reconstructs the Steam market_hash_name (StatTrak™/Souvenir prefix + wear
+// suffix), the doppler phase, and the displayed price — everything our price
+// lookup + links need.
+const CSF_CONDITIONS = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred'];
+function parseDetailListing(container: Element): CSFListing | null {
+  const nameEl =
+    container.querySelector('app-item-name .item-name') || container.querySelector('.item-name');
+  const baseName = nameEl?.textContent?.replace(/\n/g, '').trim();
+  if (!baseName) return null;
+
+  let header =
+    (container.querySelector('app-item-name .subtext') || container.querySelector('.subtext'))
+      ?.textContent?.trim() ?? '';
+
+  let prefix = '';
+  if (header.startsWith('StatTrak™')) { prefix = 'StatTrak™ '; header = header.replace('StatTrak™', '').trim(); }
+  else if (header.startsWith('Souvenir')) { prefix = 'Souvenir '; header = header.replace('Souvenir', '').trim(); }
+
+  let condition = '';
+  for (const c of CSF_CONDITIONS) { if (header.includes(c)) { condition = c; break; } }
+
+  // Doppler phase lives in the trailing paren, e.g. "Factory New (Phase 1)".
+  let phase: string | undefined;
+  const pm = header.match(/\(([^)]+)\)/);
+  if (pm) phase = pm[1]!.trim();
+
+  // Steam market_hash_name: prefix + base + " (Condition)" (phase is separate).
+  let mhn = `${prefix}${baseName}`;
+  if (condition) mhn += ` (${condition})`;
+
+  // Displayed price → USD cents (strip currency + thousands separators).
+  const priceText = container.querySelector('.price')?.textContent ?? '';
+  const priceNum = parseFloat(priceText.replace(/[^0-9.]/g, ''));
+  const cents = !isNaN(priceNum) ? Math.round(priceNum * 100) : 0;
+
+  const floatEl = container.querySelector('item-float-bar .wear');
+  const floatVal = floatEl ? parseFloat(floatEl.textContent || '') : undefined;
+
+  return {
+    id: '',
+    item: {
+      market_hash_name: mhn,
+      float_value: floatVal && !isNaN(floatVal) ? floatVal : undefined,
+      phase,
+    },
+    price: cents,
+  };
+}
+
 // ============================================================
 // Match inventory item by name + float (sell page)
 // ============================================================
@@ -317,23 +368,33 @@ function detectCardKind(card: Element): CardKind {
   return CardKind.GRID;
 }
 
-function urlListingId(): string | null {
-  const m = location.pathname.match(/^\/item\/([^/?#]+)/);
-  return m ? m[1]! : null;
-}
-
 // ============================================================
 // Match card to listing — context-aware lookup (no FIFO clobbering)
 // ============================================================
 
 function getItemData(card: Element): CSFListing | null {
-  // Already processed — read from element
+  const kind = detectCardKind(card);
+
+  // --- Item-detail (popout / /item/:id main card) ---
+  // Prefer the intercepted single listing (popupItem) when it's for THIS card's
+  // item — it carries the exact price/float/phase. But the /item/<id> page often
+  // does NOT fire a single /v1/listings/<id> GET (data carried from the grid),
+  // so popupItem may be unset/stale. In that case parse the item straight from
+  // the DOM (BetterFloat pattern) so the overlay always renders. We match by
+  // name so a leftover popupItem from another item can't leak its price.
+  if (kind === CardKind.PAGE) {
+    const domItem = parseDetailListing(card);
+    if (popupItem && (!domItem || popupItem.item.market_hash_name === domItem.item.market_hash_name)) {
+      return popupItem;
+    }
+    return domItem;
+  }
+
+  // Already processed — read from element (grid/similar/sell are stable once set)
   const stored = card.getAttribute('data-csboard');
   if (stored) {
     try { return JSON.parse(stored); } catch {}
   }
-
-  const kind = detectCardKind(card);
 
   // --- Sell page: match by name/float from inventory cache ---
   if (kind === CardKind.SELL) {
@@ -353,24 +414,6 @@ function getItemData(card: Element): CSFListing | null {
         card.setAttribute('data-csboard', JSON.stringify(fakeListing));
         return fakeListing;
       }
-    }
-    return null;
-  }
-
-  // --- Item-detail (popout / /item/:id main card) ---
-  if (kind === CardKind.PAGE) {
-    const wantedId = urlListingId();
-    // Only trust popupItem when it matches the URL's listing id. Accepting a
-    // stale popupItem from a previously-viewed item is what leaked one item's
-    // price onto every item. When the URL has an id and popupItem doesn't match
-    // yet, return null and let the retry loop pick it up once the correct
-    // /v1/listings/<id> response lands.
-    const item =
-      popupItem && (wantedId ? popupItem.id === wantedId : true) ? popupItem : null;
-    if (item) {
-      card.classList.add('item-' + item.id);
-      card.setAttribute('data-csboard', JSON.stringify(item));
-      return item;
     }
     return null;
   }
@@ -532,6 +575,30 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
 // ============================================================
 // CSBOARD panel — item-detail page only (BetterFloat-style)
 // ============================================================
+// CSBOARD's real minAsk per item — { "market_hash_name|phase": cents }, sourced
+// from the csgoskins.gg partner feed and refreshed by the background worker.
+let csboardPrices: Record<string, number> = {};
+async function loadCsboardPrices(): Promise<void> {
+  try {
+    const d = await chrome.storage.local.get('csboard_prices');
+    csboardPrices = (d['csboard_prices'] as Record<string, number>) || {};
+    logger.info('CSBOARD prices loaded', { count: Object.keys(csboardPrices).length });
+  } catch { /* ignore */ }
+}
+function getCsboardPriceCents(marketHashName: string, phase?: string | null): number | null {
+  const v = csboardPrices[`${marketHashName}|${phase ?? ''}`];
+  return typeof v === 'number' && v > 0 ? v : null;
+}
+// Stay in sync when the background worker refreshes the feed. Force the detail
+// card to re-render so a panel that was hidden (map not loaded yet) can appear.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['csboard_prices']) {
+    csboardPrices = (changes['csboard_prices'].newValue as Record<string, number>) || {};
+    getMainDetailCard()?.removeAttribute('data-csboard-key');
+    syncDetailCard();
+  }
+});
+
 // On a CSFloat item page (item-detail), inject a CSBOARD price + buy CTA
 // panel beneath the Buff line. Deep-links to /en/items/<slug>?mode=buy so the
 // user jumps straight to the same skin on CSBOARD. Only shown when CSBOARD is
@@ -544,30 +611,32 @@ function injectCsboardPanel(card: Element, listing: CSFListing): void {
   const marketHashName = listing.item.market_hash_name;
   const phase = listing.item.phase;
 
-  const price = priceEngine.getPrice(marketHashName, phase);
-  if (!price) return; // no price → no blank panel
+  // REAL CSBOARD minAsk (csgoskins feed), NOT buff163. If the item isn't on
+  // CSBOARD, don't advertise it — hide the panel.
+  const cbCents = getCsboardPriceCents(marketHashName, phase);
+  if (!cbCents) return;
 
   // Delta vs the CSFloat ask — both USD cents, so currency-neutral. buy_now only
   // (auctions have no fixed ask to compare against).
   const csfCents = listing.price;
   const isAuction = listing.type === 'auction' || !!listing.auction_details;
-  const comparable = !isAuction && csfCents > 0 && price.cents > 0;
+  const comparable = !isAuction && csfCents > 0;
 
   // Only advertise CSBOARD when it's competitive — don't show the panel when our
   // price is HIGHER than the CSFloat ask. When there's nothing to compare
   // (auction / missing ask), still show it (CTA value, no misleading "higher").
-  if (comparable && price.cents > csfCents) return;
+  if (comparable && cbCents > csfCents) return;
 
   const href = getCsboardLink(marketHashName, phase);
   // Show CSBOARD price in CSFloat's page currency (matches the Buff line + the
   // price the user sees on the page) rather than the extension currency setting.
-  const priceDisplay = formatCsfPrice(price.cents).display;
+  const priceDisplay = formatCsfPrice(cbCents).display;
 
   let deltaHtml = '';
   if (comparable) {
-    const diffPct = Math.abs(100 - (csfCents / price.cents) * 100);
+    const diffPct = Math.abs(100 - (csfCents / cbCents) * 100);
     if (diffPct >= 0.5) {
-      // price.cents <= csfCents here (higher already bailed) → always "cheaper".
+      // cbCents <= csfCents here (higher already bailed) → always "cheaper".
       deltaHtml = `<span class="csboard-panel-delta" style="color:#3fb950;">${diffPct.toFixed(diffPct > 150 ? 0 : 1)}% cheaper</span>`;
     }
   }
@@ -691,6 +760,9 @@ function adjustSellDialog(dialog: Element): void {
 
 function processCard(card: Element): void {
   if (card.querySelector('.csboard-buff-a')) return;
+  // The main item-detail card is owned by syncDetailCard() — idempotent, so it
+  // never flickers. Skip it here to avoid double-processing / fighting it.
+  if (!isSellPage() && detectCardKind(card) === CardKind.PAGE) return;
 
   // === Sell page: match by name + float (BetterFloat pattern) ===
   // The /sell grid is sorted/filtered independently from inventory array order,
@@ -810,15 +882,15 @@ function startObserver(): void {
         // Item cards (marketplace, stall, sell page)
         if (node.tagName === 'ITEM-CARD') {
           processCard(node);
+          syncDetailCard(); // in case this card is the main detail one
         }
         // Sell dialog — inject buff price into listing form
         else if (node.tagName === 'APP-SELL-DIALOG') {
           adjustSellDialog(node);
         }
-        // Item detail popout
+        // Item detail popout / page
         else if (node.tagName === 'ITEM-DETAIL') {
-          const itemCard = node.querySelector('item-card');
-          if (itemCard) processCard(itemCard);
+          syncDetailCard();
         }
         // Stall view or any container with item-cards
         else if (node.querySelectorAll) {
@@ -1199,6 +1271,7 @@ document.addEventListener('csboard_api', ((e: CustomEvent) => {
 // Phase 2: UI injection after DOM is ready
 async function initUI() {
   await priceEngine.init();
+  await loadCsboardPrices();
   injectStyles();
   startObserver();
 
@@ -1221,15 +1294,16 @@ async function initUI() {
 
   logger.info('Processing cards', { count: cards.length, page: location.pathname, invItems: inventoryItems.length });
   processAllCards();
+  syncDetailCard();
 
   // SPA navigation — re-process on URL changes + reload inventory on /sell
   let lastUrl = location.href;
   setInterval(async () => {
+    // Idempotent every tick: renders the detail card when it appears and swaps
+    // it when the item changes, without flicker (no-op when already current).
+    syncDetailCard();
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      // Drop the previous item's overlays immediately so a slow new fetch never
-      // leaves the old price on screen.
-      clearItemPageOverlays();
       if (isSellPage()) {
         inventoryItems = [];
         await ensureInventoryLoaded();
@@ -1240,20 +1314,41 @@ async function initUI() {
   }, 1000);
 }
 
-// Remove our injected overlays + cached listing data from item-detail cards.
-// CSFloat reuses the <item-card> DOM node across SPA navigations, so the
-// .csboard-buff-a dedupe guard + the cached data-csboard attribute would
-// otherwise pin the first viewed item's price onto every later item.
-function clearItemPageOverlays(): void {
-  document
+// The main item-detail card (the big one), excluding the similar-items strip.
+// On /item/<id> the main card is `.grid-item > item-card` with width="100%";
+// in the popout it's the item-card under <item-detail>. Never the similar strip.
+function getMainDetailCard(): Element | null {
+  const byWidth = Array.from(document.querySelectorAll('item-card')).find(
+    (c) => c.getAttribute('width')?.includes('100%') && !c.closest('app-similar-items'),
+  );
+  if (byWidth) return byWidth;
+  const detail = document.querySelector('item-detail');
+  if (!detail) return null;
+  return Array.from(detail.querySelectorAll('item-card')).find((c) => !c.closest('app-similar-items')) || null;
+}
+
+// Idempotent owner of the main detail card. Renders the marketplace price line +
+// CSBOARD panel for the CURRENT item, and only re-renders when the item actually
+// changes (tracked via data-csboard-key) — so repeated calls never flicker.
+// CSFloat reuses the <item-card> DOM node across navigations, hence the key check
+// rather than the .csboard-buff-a presence guard alone.
+function syncDetailCard(): void {
+  const card = getMainDetailCard();
+  if (!card) return;
+  const listing = getItemData(card);
+  if (!listing) return;
+  const key = `${listing.item.market_hash_name}|${listing.item.phase ?? ''}`;
+  // Same item already rendered → leave it (no flicker).
+  if (card.getAttribute('data-csboard-key') === key && card.querySelector('.csboard-buff-a')) {
+    return;
+  }
+  // New item (or first render) → swap overlays for this item.
+  card
     .querySelectorAll('.csboard-buff-a, .csboard-panel, .csboard-sale-tag')
     .forEach((el) => el.remove());
-  document.querySelectorAll('item-card[data-csboard]').forEach((card) => {
-    card.removeAttribute('data-csboard');
-    Array.from(card.classList)
-      .filter((c) => c.startsWith('item-'))
-      .forEach((c) => card.classList.remove(c));
-  });
+  card.setAttribute('data-csboard-key', key);
+  injectPriceOverlay(card, listing);
+  injectCsboardPanel(card, listing);
 }
 
 if (document.readyState === 'loading') {

@@ -530,6 +530,39 @@ async function refreshAllPrices(): Promise<{ success: boolean; count: number }> 
   }
 }
 
+// CSBOARD's OWN minAsk per item — reuses the public csgoskins.gg partner feed
+// (GET /api/csgoskinsgg), which serves exactly what an anonymous visitor pays on
+// checkout (cheapest_price), one row per Doppler phase. Stored as a compact
+// { "name|phase": cents } map for the CSFloat panel to read. This is the REAL
+// CSBOARD price (not buff163, which the price-engine carries).
+const CSBOARD_PRICES_KEY = 'csboard_prices';
+
+async function refreshCsboardPrices(): Promise<{ success: boolean; count: number }> {
+  try {
+    const apiBase = await getApiBase(); // https://csboard.com/api
+    const response = await fetch(`${apiBase}/csgoskinsgg`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const rows = (await response.json()) as Array<{
+      market_hash_name?: string;
+      phase?: string | null;
+      cheapest_price?: number;
+    }>;
+    const map: Record<string, number> = {};
+    for (const r of rows) {
+      if (!r.market_hash_name || typeof r.cheapest_price !== 'number' || r.cheapest_price <= 0) continue;
+      const key = `${r.market_hash_name}|${r.phase ?? ''}`;
+      const cents = Math.round(r.cheapest_price * 100);
+      if (map[key] === undefined || cents < map[key]!) map[key] = cents;
+    }
+    await chrome.storage.local.set({ [CSBOARD_PRICES_KEY]: map });
+    logger.info('CSBOARD prices refreshed', { count: Object.keys(map).length });
+    return { success: true, count: Object.keys(map).length };
+  } catch (err) {
+    logger.error('Failed to refresh CSBOARD prices', { error: String(err) });
+    return { success: false, count: 0 };
+  }
+}
+
 async function refreshExchangeRates(): Promise<void> {
   try {
     const apiBase = await getApiBase();
@@ -560,6 +593,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
   // Load prices immediately
   refreshAllPrices().catch(err => logger.error('Initial price load failed', { error: String(err) }));
+  refreshCsboardPrices().catch(err => logger.error('Initial CSBOARD price load failed', { error: String(err) }));
   refreshExchangeRates().catch(err => logger.error('Initial rates load failed', { error: String(err) }));
 
   // Sync settings from CSBoard site (currency, priceSource)
@@ -574,6 +608,7 @@ chrome.runtime.onStartup.addListener(async () => {
   logger.info('Extension startup (service worker wake)');
   await registerAlarms();
   refreshAllPrices().catch(err => logger.error('Startup price load failed', { error: String(err) }));
+  refreshCsboardPrices().catch(err => logger.error('Startup CSBOARD price load failed', { error: String(err) }));
   refreshExchangeRates().catch(err => logger.error('Startup rates load failed', { error: String(err) }));
   syncSettingsFromSite().catch(() => {});
 });
@@ -605,6 +640,7 @@ async function syncSettingsFromSite(): Promise<void> {
 
 async function registerAlarms() {
   chrome.alarms.create('refresh-prices', { periodInMinutes: 5 });
+  chrome.alarms.create('refresh-csboard-prices', { periodInMinutes: 10 });
   chrome.alarms.create('refresh-exchange-rates', { periodInMinutes: 60 });
 }
 
@@ -612,6 +648,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   switch (alarm.name) {
     case 'refresh-prices':
       await refreshAllPrices();
+      return;
+    case 'refresh-csboard-prices':
+      await refreshCsboardPrices();
       return;
     case 'refresh-exchange-rates':
       await refreshExchangeRates();
