@@ -68,14 +68,24 @@ const contentScripts = [
   { entry: 'content-scripts/csfloat/csfloat.ts', out: 'content/csfloat.js' },
 ];
 
-// Check for additional content scripts
+// Check for additional content scripts.
+// Only ones the manifest actually registers: modules that exist purely to be
+// imported by another content script (sell-ui.ts) would otherwise ship as an
+// extra unreferenced bundle in the Web Store package.
+const manifestForEntries = JSON.parse(readFileSync(resolve(SRC, 'manifest.json'), 'utf-8'));
+const manifestEntries = new Set(
+  (manifestForEntries.content_scripts || [])
+    .flatMap((cs) => cs.js || [])
+    .map((p) => p.replace(/^src\//, '')),
+);
+
 const steamDir = resolve(SRC, 'content-scripts/steam');
 const existingEntries = new Set(contentScripts.map(s => s.entry));
 if (existsSync(steamDir)) {
   for (const f of readdirSync(steamDir)) {
     if (f.endsWith('.ts') && !f.startsWith('_')) {
       const entry = `content-scripts/steam/${f}`;
-      if (!existingEntries.has(entry)) {
+      if (!existingEntries.has(entry) && manifestEntries.has(entry)) {
         const outName = f.replace('.ts', '.js');
         contentScripts.push({ entry, out: `content/${outName}` });
       }
