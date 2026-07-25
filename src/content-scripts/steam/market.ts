@@ -13,10 +13,12 @@
 // - Single price fetch per page (not per listing)
 // - Observer for paginated listings
 
-import { SITE_BASE } from '../../shared/config';
 import { sendTypedMessage } from '../../shared/message-bus';
 import { createLogger } from '../../shared/logger';
+import { getCsboardLink } from '../../shared/items';
 import { MarketHashName, type PriceData } from '../../shared/types';
+import { getWalletFeeInfo, formatWalletAmount, receivedForBuyerPays } from '../../shared/steam-fees';
+import { getOrderBook, primeItemNameId, type OrderBook } from '../../shared/market-orders';
 
 const logger = createLogger('market');
 
@@ -28,6 +30,8 @@ class MarketScript {
   private observer: MutationObserver | null = null;
   private itemPrice: PriceData | null = null;
   private itemName: string | null = null;
+  /** Real CSBOARD minAsk in USD cents (csgoskins feed), keyed "name|phase". */
+  private csboardCents: number | null = null;
 
   private static readonly RETRY_INTERVAL_MS = 1000;
   private static readonly MAX_RETRIES = 10;
@@ -41,10 +45,16 @@ class MarketScript {
     }
 
     // Fetch price once for the item
+    await this.loadCsboardPrice();
     await this.fetchPrice();
 
     // Process listings
     this.waitForListings(0);
+
+    // Steam's own order book, read from the id this page already carries.
+    this.loadOrderBook().catch((err) =>
+      logger.debug('Order book unavailable', { error: String(err) }),
+    );
   }
 
   destroy() {
@@ -69,6 +79,80 @@ class MarketScript {
     } else if (!result.ok) {
       logger.warn('Failed to fetch price', { item: this.itemName, error: result.error.message });
     }
+  }
+
+  // --- CSBOARD price (real minAsk, not buff163) ---
+  //
+  // GET_PRICES never carries `csboard` — the background worker keeps the real
+  // CSBOARD minAsk in its own `csboard_prices` map (csgoskins partner feed,
+  // USD cents, keyed "name|phase"). Same source the CSFloat panel reads, so the
+  // two surfaces can never disagree.
+
+  private async loadCsboardPrice() {
+    if (!this.itemName) return;
+    try {
+      const data = await chrome.storage.local.get('csboard_prices');
+      const map = (data['csboard_prices'] as Record<string, number> | undefined) ?? {};
+      const cents = map[`${this.itemName}|`];
+      if (typeof cents === 'number' && cents > 0) this.csboardCents = cents;
+    } catch {
+      // no feed cached yet — banner just omits the CSBOARD line
+    }
+  }
+
+  // --- Steam Order Book ---
+  //
+  // Adds the two numbers Steam hides on this page: the highest standing buy
+  // order (what an instant sale actually fills at) and what the seller keeps
+  // after the 15% cut. The item_nameid comes off this page's own inline script,
+  // so this costs exactly one JSON request.
+
+  private async loadOrderBook() {
+    if (!this.itemName) return;
+
+    const idMatch = /Market_LoadOrderSpread\(\s*(\d+)\s*\)/.exec(document.documentElement.innerHTML);
+    if (idMatch?.[1]) primeItemNameId(this.itemName, idMatch[1]);
+
+    const wallet = getWalletFeeInfo();
+    const result = await getOrderBook(this.itemName, wallet);
+    if (!result.ok) {
+      logger.debug('Order book fetch failed', { error: result.error.message });
+      return;
+    }
+    this.injectOrderBookRow(result.value, wallet);
+  }
+
+  private injectOrderBookRow(book: OrderBook, wallet: ReturnType<typeof getWalletFeeInfo>) {
+    // The banner may not exist yet when the price feed missed this item.
+    if (!document.getElementById('csboard-market-banner')) this.injectPriceBanner();
+    const banner = document.getElementById('csboard-market-banner');
+    if (!banner || banner.querySelector('.csboard-orderbook')) return;
+
+    const row = document.createElement('div');
+    row.className = 'csboard-orderbook';
+
+    const bid = book.highestBuyOrder;
+    const ask = book.lowestSellOrder;
+
+    const parts = [
+      `<span class="csboard-price-item">Steam bid: <strong>${bid !== null ? formatWalletAmount(bid, wallet) : '—'}</strong></span>`,
+      `<span class="csboard-price-item">Steam ask: <strong>${ask !== null ? formatWalletAmount(ask, wallet) : '—'}</strong></span>`,
+    ];
+
+    if (bid !== null) {
+      const net = receivedForBuyerPays(bid, wallet);
+      parts.push(
+        `<span class="csboard-price-item">Instant sell nets: <strong class="csboard-net">${formatWalletAmount(net.received, wallet)}</strong></span>`,
+      );
+    }
+
+    if (bid !== null && ask !== null && ask > 0) {
+      const spread = Math.round(((ask - bid) / ask) * 100);
+      parts.push(`<span class="csboard-price-item">Spread: <strong>${spread}%</strong></span>`);
+    }
+
+    row.innerHTML = parts.join('');
+    banner.appendChild(row);
   }
 
   // --- Listings Observer ---
@@ -100,10 +184,13 @@ class MarketScript {
 
   // --- Price Banner ---
 
+  // Renders with whatever we have. It used to bail unless GET_PRICES returned a
+  // row, which also hid the Steam order book (that row lives inside this
+  // banner) for every item the price feed is missing.
   private injectPriceBanner() {
-    if (document.getElementById('csboard-market-banner') || !this.itemPrice || !this.itemName) return;
+    if (document.getElementById('csboard-market-banner') || !this.itemName) return;
 
-    const price = this.itemPrice;
+    const price = this.itemPrice ?? ({} as PriceData);
     const parts: string[] = ['<span class="csboard-logo">CSBOARD</span>'];
 
     if (price.buff163) {
@@ -112,8 +199,8 @@ class MarketScript {
     if (price.steam) {
       parts.push(`<span class="csboard-price-item">Steam: <strong>$${price.steam.toFixed(2)}</strong></span>`);
     }
-    if (price.csboard) {
-      parts.push(`<span class="csboard-price-item">CSBOARD: <strong>$${price.csboard.toFixed(2)}</strong></span>`);
+    if (this.csboardCents) {
+      parts.push(`<span class="csboard-price-item">CSBOARD: <strong>$${(this.csboardCents / 100).toFixed(2)}</strong></span>`);
     }
 
     if (price.buff163 && price.steam && price.steam > price.buff163) {
@@ -121,8 +208,10 @@ class MarketScript {
       parts.push(`<span class="csboard-savings">Save ${savings}% on Buff</span>`);
     }
 
+    // `/item/<name>` was never a real route — the item page is
+    // `/<locale>/items/<slug>`. getCsboardLink() is the single source for it.
     parts.push(`
-      <a href="${SITE_BASE}/item/${encodeURIComponent(this.itemName)}" target="_blank" class="csboard-view-btn">
+      <a href="${getCsboardLink(this.itemName)}" target="_blank" class="csboard-view-btn">
         View on CSBOARD
       </a>
     `);

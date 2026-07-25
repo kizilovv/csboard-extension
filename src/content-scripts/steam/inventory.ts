@@ -23,6 +23,7 @@ import {
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
+import { setupSellUi, injectSellPanel, repaintSellSelection } from './sell-ui';
 import { decodeHex } from '@csfloat/cs2-inspect-serializer';
 
 const logger = createLogger('inventory');
@@ -357,6 +358,9 @@ const addPerItemInfo = (): void => {
 
     el.setAttribute('data-processed', 'true');
   });
+
+  // Steam rebuilds item tiles when pages flip; selection highlight must survive.
+  repaintSellSelection();
 };
 
 // ============================================================
@@ -855,7 +859,14 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
 
     // Drop stale blocks anywhere they sit — the right panel can re-render with
     // entirely different containers, so we don't restrict the cleanup scope.
-    document.querySelectorAll('.csboard-lookup-inline').forEach((el) => el.remove());
+    // The sell panel goes with them: it is anchored to a lookup block, and an
+    // orphaned panel would keep selling the previously-open item.
+    document.querySelectorAll('.csboard-lookup-inline, .csboard-sell-panel').forEach((el) => el.remove());
+
+    // The sell panel is single-instance (it spends real items — two live copies
+    // of the same buttons is how you double-list by accident), so it attaches to
+    // the first anchor whose item we actually resolved.
+    let sellAnchor: { block: Element; item: any } | null = null;
 
     anchors.forEach(({ row, itemName }) => {
       // Skip if we've already injected immediately after this row this pass.
@@ -867,7 +878,14 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       );
       const block = buildLookupBlock(item, itemName);
       row.insertAdjacentElement('afterend', block);
+
+      if (!sellAnchor && item) sellAnchor = { block, item };
     });
+
+    if (sellAnchor) {
+      const { block, item } = sellAnchor as { block: Element; item: any };
+      void injectSellPanel(block, item);
+    }
     return true;
   };
 
@@ -919,18 +937,28 @@ const setupLookupObserver = (): void => {
   // Run once now in case the panel is already populated.
   injectLookupLinksNearInspect();
 
+  // Anything we render ourselves must be invisible to this observer, otherwise
+  // the sell panel's own async re-renders (loading → priced) retrigger the
+  // injector that created it — an endless remove/re-add loop.
+  const OURS = ['csboard-lookup-inline', 'csboard-sell-panel', 'csboard-sell-toasts'];
+  const isOurs = (n: Node): boolean =>
+    n.nodeType === Node.ELEMENT_NODE &&
+    OURS.some((c) => (n as Element).classList?.contains(c));
+
   const obs = new MutationObserver((mutations) => {
     // Ignore mutations caused by our own injected block.
     for (const m of mutations) {
+      // Mutations *inside* our own UI never mean the Steam panel changed.
+      if (
+        m.target.nodeType === Node.ELEMENT_NODE &&
+        (m.target as Element).closest?.('.csboard-sell-panel, .csboard-sell-toasts')
+      ) {
+        continue;
+      }
+
       const added = Array.from(m.addedNodes);
       const removed = Array.from(m.removedNodes);
-      const onlyOurs = (nodes: Node[]) =>
-        nodes.length > 0 &&
-        nodes.every(
-          (n) =>
-            n.nodeType === Node.ELEMENT_NODE &&
-            (n as Element).classList?.contains('csboard-lookup-inline'),
-        );
+      const onlyOurs = (nodes: Node[]) => nodes.length > 0 && nodes.every(isOurs);
       if (onlyOurs(added) || onlyOurs(removed)) continue;
       schedule();
       return;
@@ -1348,6 +1376,10 @@ async function init() {
   // 11. Add sorting function bar (cs2trader style — Steam-native select)
   // Sorting disabled — was breaking the page
   addInventorySortingBar();
+
+  // 12. Sell UI — mass-select toolbar in the header bar + per-item buttons in
+  //     the right panel (those attach via injectLookupLinksNearInspect).
+  setupSellUi(() => items, ensureHeaderBar());
 
   logger.info('Inventory page ready');
 }

@@ -610,3 +610,238 @@ a.inventory_item_link { top: 20px !important; }
   color: #c6d4df;
   margin: 4px 0;
 }
+
+/* ============================================================
+   Sell UI — inventory detail panel + mass-sell toolbar
+   Steam-native palette on purpose: these controls sit inside
+   Steam chrome, and a CSBOARD-branded card here reads as an ad.
+   ============================================================ */
+
+.csboard-sell-panel {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid #4c5866;
+  border-radius: 4px;
+  background: #1b2838;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  color: #c6d4df;
+}
+
+.csboard-sell-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #67c1f5;
+  margin-bottom: 6px;
+}
+
+.csboard-sell-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.csboard-sell-btn {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid #4b8cbe;
+  border-radius: 3px;
+  background: #2a475e;
+  color: #dfe8f2;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.csboard-sell-btn strong { color: #ffffff; }
+.csboard-sell-btn:hover:not(:disabled) { background: #3d6896; }
+.csboard-sell-btn:focus-visible { outline: 2px solid #67c1f5; outline-offset: 1px; }
+
+.csboard-sell-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: #3a4653;
+}
+
+.csboard-sell-btn.instant {
+  border-color: #5c9e4b;
+  background: #2c4a2c;
+}
+.csboard-sell-btn.instant:hover:not(:disabled) { background: #3a6338; }
+
+.csboard-sell-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #9aa8b5;
+}
+
+/* Mass-sell toolbar (inventory header bar) */
+
+.csboard-mass-bar {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  color: #c6d4df;
+}
+
+.csboard-mass-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.csboard-mass-btn {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid #4b8cbe;
+  border-radius: 3px;
+  background: #3d6896;
+  color: #e8f1fa;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.csboard-mass-btn:hover { background: #4b7cae; }
+.csboard-mass-btn:focus-visible { outline: 2px solid #67c1f5; outline-offset: 1px; }
+.csboard-mass-btn.ghost { background: #2a3f55; }
+.csboard-mass-btn.active { background: #c15b2e; border-color: #e07a4a; }
+
+.csboard-mass-count { color: #9aa8b5; }
+
+.item.app730.csboard-mass-selected {
+  outline: 2px solid #ffb54d;
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px rgba(255, 181, 77, 0.35);
+}
+
+/* Toasts + undo */
+
+.csboard-sell-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.csboard-sell-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #4c5866;
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #16202d;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  line-height: 1.4;
+  color: #dfe8f2;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.csboard-sell-toast.info { border-left-color: #67c1f5; }
+.csboard-sell-toast.ok { border-left-color: #6fbf5b; }
+.csboard-sell-toast.err { border-left-color: #e46a5f; }
+
+.csboard-sell-undo {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid #4b8cbe;
+  border-radius: 3px;
+  background: #2a475e;
+  color: #e8f1fa;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.csboard-sell-undo:hover { background: #3d6896; }
+.csboard-sell-undo:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ============================================================
+   Market home (/market/) — totals, scan, flagged listings
+   ============================================================ */
+
+.csboard-market-home {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #4c5866;
+  border-radius: 4px;
+  background: #1b2838;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  color: #c6d4df;
+}
+
+.csboard-mh-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.csboard-mh-row + .csboard-mh-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #2f3d4c;
+}
+
+.csboard-mh-stat { color: #9aa8b5; }
+.csboard-mh-stat strong { color: #dfe8f2; }
+.csboard-mh-net { color: var(--steam-ingame-green); }
+
+.csboard-mh-label { color: #9aa8b5; display: inline-flex; align-items: center; gap: 6px; }
+
+.csboard-mh-status { color: #9aa8b5; }
+.csboard-mh-status.ok { color: var(--steam-ingame-green); }
+.csboard-mh-status.err { color: #e46a5f; }
+
+.csboard-mh-diff {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.csboard-mh-diff.over { background: rgba(228, 106, 95, 0.16); color: #e46a5f; }
+.csboard-mh-diff.under { background: rgba(111, 191, 91, 0.16); color: #6fbf5b; }
+.csboard-mh-diff.neutral { background: rgba(154, 168, 181, 0.16); color: #9aa8b5; }
+
+.market_listing_row.csboard-mh-flagged {
+  box-shadow: inset 3px 0 0 #e46a5f;
+}
+
+.market_listing_row.csboard-mh-removed {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+/* Order book row on the listing page banner */
+
+.csboard-orderbook {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  width: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #2f3d4c;
+}
+
+.csboard-orderbook .csboard-net { color: var(--steam-ingame-green); }
+
+@media (prefers-reduced-motion: reduce) {
+  .csboard-sell-toast { box-shadow: none; }
+}

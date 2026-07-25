@@ -87,6 +87,15 @@
     },
     {
       "matches": [
+        "*://steamcommunity.com/market",
+        "*://steamcommunity.com/market/"
+      ],
+      "js": ["src/content-scripts/steam/market-home.ts"],
+      "css": ["src/styles/csboard-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "*://steamcommunity.com/*/inventoryhistory*",
         "*://steamcommunity.com/*/tradehistory*"
       ],
