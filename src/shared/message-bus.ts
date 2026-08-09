@@ -102,6 +102,24 @@ type HandlerMap = {
  *   router.on('LOGIN', async (msg) => loginWithToken(msg.data.token));
  *   router.listen();
  */
+/**
+ * Fire-and-forget message from a content script.
+ *
+ * After the extension reloads, content scripts injected by the previous build
+ * keep running in already-open tabs, and their first `chrome.runtime` call
+ * throws "Extension context invalidated" — an uncaught error in the page for a
+ * page that is simply out of date. There is nothing to recover: the new build
+ * takes over on the next navigation.
+ */
+export function sendMessageIfContextAlive(message: unknown): void {
+  try {
+    if (!chrome.runtime?.id) return;
+    chrome.runtime.sendMessage(message as never, () => void chrome.runtime.lastError);
+  } catch {
+    // Invalidated context; the tab predates the current build.
+  }
+}
+
 export function createMessageRouter() {
   const handlers: HandlerMap = {};
   const routerLogger = createLogger('router');
@@ -114,24 +132,32 @@ export function createMessageRouter() {
 
     listen() {
       chrome.runtime.onMessage.addListener(
-        (message: ExtensionMessage, sender, sendResponse) => {
-          const handler = (handlers as Record<string, HandlerFn<MessageType>>)[message.type];
+        (message: unknown, sender, sendResponse) => {
+          if (sender.id !== chrome.runtime.id ||
+              typeof message !== 'object' || message === null || Array.isArray(message) ||
+              typeof (message as Record<string, unknown>)['type'] !== 'string') {
+            routerLogger.warn('Rejected malformed or non-extension message');
+            sendResponse({ error: 'Invalid internal message' });
+            return false;
+          }
+          const typedMessage = message as ExtensionMessage;
+          const handler = (handlers as Record<string, HandlerFn<MessageType>>)[typedMessage.type];
 
           if (!handler) {
-            routerLogger.warn('No handler for message type', { type: message.type });
-            sendResponse({ error: `Unknown message type: ${message.type}` });
+            routerLogger.warn('No handler for message type', { type: typedMessage.type });
+            sendResponse({ error: `Unknown message type: ${typedMessage.type}` });
             return true;
           }
 
-          routerLogger.debug('Handling message', { type: message.type });
+          routerLogger.debug('Handling message', { type: typedMessage.type });
 
-          handler(message as never, sender)
+          handler(typedMessage as never, sender)
             .then((result) => {
               sendResponse(result);
             })
             .catch((err) => {
               routerLogger.error('Handler error', {
-                type: message.type,
+                type: typedMessage.type,
                 error: err instanceof Error ? err.message : String(err),
               });
               sendResponse({ error: err instanceof Error ? err.message : 'Internal error' });
@@ -146,35 +172,6 @@ export function createMessageRouter() {
       });
     },
 
-    /**
-     * Dispatch a message through the router manually.
-     * Used for onMessageExternal (website → extension).
-     */
-    dispatch(
-      message: ExtensionMessage,
-      sender: chrome.runtime.MessageSender,
-      sendResponse: (response?: unknown) => void,
-    ) {
-      const handler = (handlers as Record<string, HandlerFn<MessageType>>)[message.type];
-
-      if (!handler) {
-        routerLogger.warn('No handler for external message type', { type: message.type });
-        sendResponse({ error: `Unknown message type: ${message.type}` });
-        return;
-      }
-
-      routerLogger.debug('Dispatching external message', { type: message.type });
-
-      handler(message as never, sender)
-        .then((result) => sendResponse(result))
-        .catch((err) => {
-          routerLogger.error('External handler error', {
-            type: message.type,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          sendResponse({ error: err instanceof Error ? err.message : 'Internal error' });
-        });
-    },
   };
 }
 

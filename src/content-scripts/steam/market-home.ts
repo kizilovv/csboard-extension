@@ -30,7 +30,13 @@ import {
   type WalletFeeInfo,
 } from '../../shared/steam-fees';
 import { getOrderBook, rateLimitSecondsLeft } from '../../shared/market-orders';
-import { removeListing } from '../../shared/market-actions';
+import {
+  authorizeListingRemovalFromUserGesture,
+  batchStopReasonForError,
+  getCurrentSteamAccountId,
+  removeListing,
+  type ListingRemovalAuthorization,
+} from '../../shared/market-actions';
 
 const logger = createLogger('market-home');
 
@@ -191,8 +197,27 @@ function renderPanel(): void {
   panel.querySelector('#csboard-mh-scan')!.addEventListener('click', () => {
     void scanPrices();
   });
-  panel.querySelector('#csboard-mh-remove')!.addEventListener('click', () => {
-    void removeFlagged();
+  panel.querySelector('#csboard-mh-remove')!.addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
+    if (!wallet.fromPage) {
+      setStatus('Steam wallet currency is unavailable — listing removal is disabled.', 'err');
+      return;
+    }
+    const ids = [...flagged];
+    const steamId = getCurrentSteamAccountId();
+    if (!steamId) {
+      setStatus('Cannot verify the active Steam account — reload before removing listings.', 'err');
+      return;
+    }
+    const authorization = authorizeListingRemovalFromUserGesture(event, ids, steamId);
+    if (!authorization.ok) {
+      setStatus(authorization.error.message, 'err');
+      return;
+    }
+    if (!window.confirm(`Remove ${ids.length} reviewed Steam listing(s)? Already removed listings cannot be restored automatically.`)) {
+      return;
+    }
+    void removeFlagged(ids, authorization.value);
   });
 
   updateRemoveButton();
@@ -326,8 +351,10 @@ async function scanPrices(): Promise<void> {
 // Bulk remove
 // ============================================================
 
-async function removeFlagged(): Promise<void> {
-  const ids = [...flagged];
+async function removeFlagged(
+  ids: readonly string[],
+  authorization: ListingRemovalAuthorization,
+): Promise<void> {
   if (ids.length === 0) return;
 
   const btn = document.getElementById('csboard-mh-remove') as HTMLButtonElement | null;
@@ -340,11 +367,12 @@ async function removeFlagged(): Promise<void> {
     const id = ids[i]!;
     setStatus(`Removing ${i + 1}/${ids.length}…`);
 
-    const result = await removeListing(id);
+    const result = await removeListing(id, authorization);
     if (!result.ok) {
       failed += 1;
-      if (result.error.code === 'RATE_LIMITED') {
-        setStatus(`Stopped — Steam rate limit. ${removed} removed.`, 'err');
+      const stopReason = batchStopReasonForError(result.error);
+      if (stopReason) {
+        setStatus(`Stopped (${stopReason.replace(/_/g, ' ')}). ${removed} removed.`, 'err');
         break;
       }
       logger.warn('removeListing failed', { listingId: id, error: result.error.message });

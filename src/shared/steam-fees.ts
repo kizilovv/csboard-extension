@@ -72,6 +72,34 @@ const WALLET_ATTR = 'csboardWalletInfo';
 
 let cachedWallet: WalletFeeInfo | null = null;
 
+/** Reject malformed page globals before they can influence a Steam write. */
+export function normalizeWalletFeeInfo(raw: unknown): WalletFeeInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Partial<WalletFeeInfo>;
+  const validInteger = (input: unknown, max: number): input is number =>
+    typeof input === 'number' && Number.isSafeInteger(input) && input >= 0 && input <= max;
+  const validRate = (input: unknown): input is number =>
+    typeof input === 'number' && Number.isFinite(input) && input >= 0 && input <= 0.5;
+
+  if (!validInteger(value.currencyId, 100) || value.currencyId < 1) return null;
+  if (typeof value.country !== 'string' || !/^[A-Z]{2}$/.test(value.country)) return null;
+  if (!validRate(value.feePercent) || !validRate(value.publisherFeePercent)) return null;
+  if (!validInteger(value.feeBase, 1_000_000)) return null;
+  if (!validInteger(value.feeMinimum, 1_000_000)) return null;
+  if (value.balance !== null && !validInteger(value.balance, Number.MAX_SAFE_INTEGER)) return null;
+
+  return {
+    currencyId: value.currencyId,
+    country: value.country,
+    feePercent: value.feePercent,
+    feeBase: value.feeBase,
+    feeMinimum: value.feeMinimum,
+    publisherFeePercent: value.publisherFeePercent,
+    balance: value.balance,
+    fromPage: value.fromPage === true,
+  };
+}
+
 /**
  * Read g_rgWalletInfo out of the page. Content scripts live in an isolated
  * world and cannot touch page globals, so this goes through the synchronous
@@ -91,12 +119,12 @@ export function getWalletFeeInfo(): WalletFeeInfo {
       var out = null;
       if (w) {
         out = {
-          currencyId: parseInt(w.wallet_currency, 10) || 1,
-          country: (typeof g_strCountryCode !== 'undefined' && g_strCountryCode) ? g_strCountryCode : (w.wallet_country || 'US'),
-          feePercent: parseFloat(w.wallet_fee_percent) || 0.05,
-          feeBase: parseInt(w.wallet_fee_base, 10) || 0,
-          feeMinimum: parseInt(w.wallet_fee_minimum, 10) || 1,
-          publisherFeePercent: parseFloat(w.wallet_publisher_fee_percent_default) || 0.10,
+          currencyId: parseInt(w.wallet_currency, 10),
+          country: (typeof g_strCountryCode !== 'undefined' && g_strCountryCode) ? String(g_strCountryCode).toUpperCase() : String(w.wallet_country || '').toUpperCase(),
+          feePercent: parseFloat(w.wallet_fee_percent),
+          feeBase: parseInt(w.wallet_fee_base, 10),
+          feeMinimum: parseInt(w.wallet_fee_minimum, 10),
+          publisherFeePercent: parseFloat(w.wallet_publisher_fee_percent_default),
           balance: (w.wallet_balance !== undefined && w.wallet_balance !== null) ? parseInt(w.wallet_balance, 10) : null
         };
       }
@@ -110,8 +138,9 @@ export function getWalletFeeInfo(): WalletFeeInfo {
 
   try {
     const parsed = raw ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed.currencyId === 'number') {
-      cachedWallet = { ...parsed, fromPage: true } as WalletFeeInfo;
+    const normalized = normalizeWalletFeeInfo({ ...parsed, fromPage: true });
+    if (normalized) {
+      cachedWallet = normalized;
       logger.debug('Wallet info read from page', {
         currencyId: cachedWallet.currencyId,
         country: cachedWallet.country,

@@ -10,13 +10,11 @@
 import type { StorageSchema, StorageKey, ExtensionSettings } from './types';
 import { STORAGE_KEYS, DEFAULT_SETTINGS } from './types';
 import { createLogger } from './logger';
-import type { EncryptedToken } from './crypto';
-import { encryptToken as encryptTokenUtil, decryptToken as decryptTokenUtil } from './crypto';
 
 const logger = createLogger('storage');
 
 // Current storage schema version
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 3;
 
 // --- Typed Get/Set ---
 
@@ -82,7 +80,14 @@ export async function storageGetMany<K extends StorageKey>(
 
 export async function getSettings(): Promise<ExtensionSettings> {
   const settings = await storageGet(STORAGE_KEYS.SETTINGS);
-  return { ...DEFAULT_SETTINGS, ...settings };
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    portfolioSources: {
+      ...DEFAULT_SETTINGS.portfolioSources,
+      ...(settings?.portfolioSources ?? {}),
+    },
+  };
 }
 
 export async function updateSettings(
@@ -161,8 +166,53 @@ const migrations: Migration[] = [
       }
     },
   },
-  // Add new migrations here as schema evolves:
-  // { version: 2, up: async () => { ... } },
+  {
+    version: 2,
+    up: async () => {
+      // P0 migration: remove every legacy/persistent Steam credential path.
+      await chrome.storage.local.remove([
+        'csboard_steam_access_token',
+        'csboard_encrypted_access_token',
+        'csboard_access_token_iv',
+      ]);
+      await chrome.storage.session.remove([
+        'csboard_steam_access_token',
+        'csboard_session_crypto_key',
+      ]);
+
+      const current = await storageGet(STORAGE_KEYS.SETTINGS);
+      await storageSet(STORAGE_KEYS.SETTINGS, {
+        ...DEFAULT_SETTINGS,
+        ...current,
+        // Automatic site settings sync was the shipped behavior, so migration
+        // preserves it. Portfolio upload remains separately opt-in and off.
+        followCsboardSettings: current?.followCsboardSettings ?? true,
+        showCsboardPricesOnCsfloat: current?.showCsboardPricesOnCsfloat ?? true,
+        portfolioSyncEnabled: current?.portfolioSyncEnabled ?? false,
+        portfolioSources: {
+          ...DEFAULT_SETTINGS.portfolioSources,
+          ...(current?.portfolioSources ?? {}),
+        },
+      });
+    },
+  },
+  {
+    version: 3,
+    up: async () => {
+      const current = await storageGet(STORAGE_KEYS.SETTINGS);
+      await storageSet(STORAGE_KEYS.SETTINGS, {
+        ...DEFAULT_SETTINGS,
+        ...current,
+        // Buff pages are a newly requested host surface. Existing installs
+        // must opt in explicitly before we alter that marketplace UI.
+        showBetterBuffOnBuff: current?.showBetterBuffOnBuff ?? false,
+        portfolioSources: {
+          ...DEFAULT_SETTINGS.portfolioSources,
+          ...(current?.portfolioSources ?? {}),
+        },
+      });
+    },
+  },
 ];
 
 /**
@@ -195,83 +245,4 @@ export async function runMigrations(): Promise<void> {
   }
 
   logger.info(`Migrations complete. Storage at v${CURRENT_VERSION}`);
-}
-
-// --- Access Token Management (encrypted storage) ---
-
-/**
- * Store an access token encrypted with AES-GCM.
- * The encryption key is stored in ephemeral session storage.
- * On browser restart, the session key is cleared, forcing re-entry.
- */
-export async function setEncryptedAccessToken(plaintext: string): Promise<boolean> {
-  try {
-    const result = await encryptTokenUtil(plaintext);
-    if (!result.ok) {
-      logger.error('Failed to encrypt access token', { error: result.error.message });
-      return false;
-    }
-
-    const encrypted = result.value;
-    await storageSet(STORAGE_KEYS.ENCRYPTED_ACCESS_TOKEN, encrypted.ciphertext);
-    await storageSet(STORAGE_KEYS.ACCESS_TOKEN_IV, encrypted.iv);
-
-    logger.info('Access token encrypted and stored');
-    return true;
-  } catch (err) {
-    logger.error('Failed to store encrypted access token', { error: String(err) });
-    return false;
-  }
-}
-
-/**
- * Retrieve and decrypt the stored access token.
- * Returns null if token not found or decryption fails.
- */
-export async function getDecryptedAccessToken(): Promise<string | null> {
-  try {
-    const ciphertext = await storageGet(STORAGE_KEYS.ENCRYPTED_ACCESS_TOKEN);
-    const iv = await storageGet(STORAGE_KEYS.ACCESS_TOKEN_IV);
-
-    if (!ciphertext || !iv) {
-      return null;
-    }
-
-    const encrypted: EncryptedToken = {
-      ciphertext,
-      iv,
-      algorithm: 'AES-GCM',
-    };
-
-    const result = await decryptTokenUtil(encrypted);
-    if (!result.ok) {
-      logger.error('Failed to decrypt access token', { error: result.error.message });
-      return null;
-    }
-
-    return result.value;
-  } catch (err) {
-    logger.error('Failed to retrieve decrypted access token', { error: String(err) });
-    return null;
-  }
-}
-
-/**
- * Check if an access token is stored (doesn't return the token).
- */
-export async function hasEncryptedAccessToken(): Promise<boolean> {
-  const token = await storageGet(STORAGE_KEYS.ENCRYPTED_ACCESS_TOKEN);
-  return !!token;
-}
-
-/**
- * Remove the stored access token.
- */
-export async function clearEncryptedAccessToken(): Promise<void> {
-  try {
-    await storageRemove([STORAGE_KEYS.ENCRYPTED_ACCESS_TOKEN, STORAGE_KEYS.ACCESS_TOKEN_IV]);
-    logger.info('Access token cleared from storage');
-  } catch (err) {
-    logger.error('Failed to clear access token', { error: String(err) });
-  }
 }

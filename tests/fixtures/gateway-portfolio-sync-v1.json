@@ -1,0 +1,89 @@
+{
+  "description": "TEST ONLY — CSBOARD gateway v1 X25519/AES-256 cross-runtime fixture",
+  "hpkeInfo": "csboard.gateway.hpke.v1",
+  "recipientPrivateJwk": {
+    "kty": "OKP",
+    "crv": "X25519",
+    "d": "GGts5cEvnyy7DbaejAc8NF-H5H6cYKK6FgqL7bWD3F0",
+    "x": "vFaGnAIvXNwC6IKKBCFal-eBr5D7msVuZBTYY-EmfgU"
+  },
+  "recipientPublicJwk": {
+    "kty": "OKP",
+    "crv": "X25519",
+    "x": "vFaGnAIvXNwC6IKKBCFal-eBr5D7msVuZBTYY-EmfgU"
+  },
+  "devicePublicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "IXhoNqIVc_xWRYXTYwLAIxLX_AsXPU-Z3dGJ27RTAEc",
+    "y": "Ib5bxRqmJEltb4hNfHjiCXfWAvNrFXRaqAqiURqsOMQ",
+    "ext": true,
+    "key_ops": ["verify"],
+    "alg": "ES256"
+  },
+  "plaintext": {
+    "kind": "portfolio.sync.chunk.v1",
+    "syncRunId": "fixture_sync_run_0123456789012345",
+    "steamId": "76561198000000000",
+    "capturedAt": 1700000000,
+    "chunkIndex": 0,
+    "chunkCount": 1,
+    "completeness": {
+      "inventoryContext2": true,
+      "inventoryContext16": true,
+      "trades": true,
+      "offers": true
+    },
+    "inventoryItems": [{
+      "appId": "730",
+      "contextId": "2",
+      "assetId": "10001",
+      "classId": "20001",
+      "instanceId": "0",
+      "amount": "1",
+      "marketHashName": "AK-47 | Redline (Field-Tested)",
+      "tradable": true,
+      "marketable": true,
+      "onHold": false,
+      "floatValue": 0.2112
+    }],
+    "trades": [],
+    "offers": []
+  },
+  "plaintextCanonical": "{\"capturedAt\":1700000000,\"chunkCount\":1,\"chunkIndex\":0,\"completeness\":{\"inventoryContext16\":true,\"inventoryContext2\":true,\"offers\":true,\"trades\":true},\"inventoryItems\":[{\"amount\":\"1\",\"appId\":\"730\",\"assetId\":\"10001\",\"classId\":\"20001\",\"contextId\":\"2\",\"floatValue\":0.2112,\"instanceId\":\"0\",\"marketable\":true,\"marketHashName\":\"AK-47 | Redline (Field-Tested)\",\"onHold\":false,\"tradable\":true}],\"kind\":\"portfolio.sync.chunk.v1\",\"offers\":[],\"steamId\":\"76561198000000000\",\"syncRunId\":\"fixture_sync_run_0123456789012345\",\"trades\":[]}",
+  "aadCanonical": "{\"chunkCount\":1,\"chunkIndex\":0,\"deviceIdHash\":\"JW63BYuZu3hoDbegphNA_BkrpUIYXpN7CJaGlBseP9w\",\"deviceKeyId\":\"ovtxmjezf_VAbPdkdxg0V9WRJwWmNuCAIO507A9_BSU\",\"expiresAt\":1700000120,\"extensionId\":\"abcdefghijklmnopabcdefghijklmnop\",\"extensionVersion\":\"1.1.0\",\"httpMethod\":\"POST\",\"httpPath\":\"/api/extension/v2/portfolio/sync\",\"idempotencyKey\":\"fixture_idempotency_012345678901\",\"issuedAt\":1700000000,\"nonce\":\"fixture_nonce_0123456789012345678\",\"operation\":\"portfolio.sync\",\"payloadSchema\":\"portfolio.sync.chunk.v1\",\"payloadSha256\":\"-We9JTLDOSQeozfiOlQGW-pn0VbWbWVly_LLBy_VnLI\",\"plaintextBytes\":522,\"recipientKeyId\":\"gateway-fixture-2026-08\",\"requestId\":\"fixture_request_0123456789012345\",\"suite\":\"DHKEM-X25519-HKDF-SHA256/HKDF-SHA256/AES-256-GCM\",\"syncRunId\":\"fixture_sync_run_0123456789012345\",\"version\":1}",
+  "proofCanonical": "{\"ciphertext\":\"yTW_rlhArsOeUztXbfsJp2lIhjf_gDxu9YrFmMsKv0c0ogHc9sX2GSGyfPqHeTEI_UKDNnXV_RKQgtiBGE7wPHtQuYnNiUNZeqSXWxdIHrRz9qIootK3xV6q1crQa7uI3mc1FjyS_fLg_QAIzkLMFg2bxXLPJqmWavs_nNxH7_qQng230OA7qkmbPvfbz-MWMu6tw1Fjn7dPLk2udk-2qBfTgKLCqQyL7FY8Ffve3x70Vo0uE5YxoRB4mQhuPtNh38Xvw-5lDMD2Xcj5yFjoECxomod3oitoP5sYYYSHD9FRak1JLqe2pqbKwy07i5VJeSDahZ9HLLflrk9hrN0Wtqi1YxxiJICNoqPNOJ4DOf4k-RtSBrqKc5Sys90Rk-aY-wUwvMJaUgbV981FODCRhyNB3wzX9ATB-J8AW09zaAKLtVwcvg9IhGugPGJZoQ4TLwf7vonNEVsSKNusnRHR-uVtI1E3tSiD57iP8pCn0XIXe5RnXRlfnDkdKBVAHaak68SKknd1WaXZxuy5UTtDYJXp0jOTJ4B2xGBb2L6POJtePKClxehwPoo8HDilkGc9pm-VabwyfppmGMDT_hAICuzqKrHrh5ZJv__AlsgYSsHpvevadrY9aC1Qz6hKBhvM19Sipe7sBty0UF0m_2WijG1o-n5D4Nh9Sk3THXEdnR864HBM0mxiko1xNnSfEvfDxL_rVyYjRvF_4g\",\"domain\":\"csboard.gateway.proof.v1\",\"encapsulatedKey\":\"SeSHTiX-OJ7Tyfov0J0HeQfsxYCchhniEnEotqcsfHo\",\"protected\":{\"chunkCount\":1,\"chunkIndex\":0,\"deviceIdHash\":\"JW63BYuZu3hoDbegphNA_BkrpUIYXpN7CJaGlBseP9w\",\"deviceKeyId\":\"ovtxmjezf_VAbPdkdxg0V9WRJwWmNuCAIO507A9_BSU\",\"expiresAt\":1700000120,\"extensionId\":\"abcdefghijklmnopabcdefghijklmnop\",\"extensionVersion\":\"1.1.0\",\"httpMethod\":\"POST\",\"httpPath\":\"/api/extension/v2/portfolio/sync\",\"idempotencyKey\":\"fixture_idempotency_012345678901\",\"issuedAt\":1700000000,\"nonce\":\"fixture_nonce_0123456789012345678\",\"operation\":\"portfolio.sync\",\"payloadSchema\":\"portfolio.sync.chunk.v1\",\"payloadSha256\":\"-We9JTLDOSQeozfiOlQGW-pn0VbWbWVly_LLBy_VnLI\",\"plaintextBytes\":522,\"recipientKeyId\":\"gateway-fixture-2026-08\",\"requestId\":\"fixture_request_0123456789012345\",\"suite\":\"DHKEM-X25519-HKDF-SHA256/HKDF-SHA256/AES-256-GCM\",\"syncRunId\":\"fixture_sync_run_0123456789012345\",\"version\":1}}",
+  "envelope": {
+    "version": 1,
+    "protected": {
+      "version": 1,
+      "suite": "DHKEM-X25519-HKDF-SHA256/HKDF-SHA256/AES-256-GCM",
+      "operation": "portfolio.sync",
+      "httpMethod": "POST",
+      "httpPath": "/api/extension/v2/portfolio/sync",
+      "extensionId": "abcdefghijklmnopabcdefghijklmnop",
+      "extensionVersion": "1.1.0",
+      "payloadSchema": "portfolio.sync.chunk.v1",
+      "recipientKeyId": "gateway-fixture-2026-08",
+      "deviceKeyId": "ovtxmjezf_VAbPdkdxg0V9WRJwWmNuCAIO507A9_BSU",
+      "deviceIdHash": "JW63BYuZu3hoDbegphNA_BkrpUIYXpN7CJaGlBseP9w",
+      "syncRunId": "fixture_sync_run_0123456789012345",
+      "chunkIndex": 0,
+      "chunkCount": 1,
+      "requestId": "fixture_request_0123456789012345",
+      "idempotencyKey": "fixture_idempotency_012345678901",
+      "nonce": "fixture_nonce_0123456789012345678",
+      "issuedAt": 1700000000,
+      "expiresAt": 1700000120,
+      "plaintextBytes": 522,
+      "payloadSha256": "-We9JTLDOSQeozfiOlQGW-pn0VbWbWVly_LLBy_VnLI"
+    },
+    "encapsulatedKey": "SeSHTiX-OJ7Tyfov0J0HeQfsxYCchhniEnEotqcsfHo",
+    "ciphertext": "yTW_rlhArsOeUztXbfsJp2lIhjf_gDxu9YrFmMsKv0c0ogHc9sX2GSGyfPqHeTEI_UKDNnXV_RKQgtiBGE7wPHtQuYnNiUNZeqSXWxdIHrRz9qIootK3xV6q1crQa7uI3mc1FjyS_fLg_QAIzkLMFg2bxXLPJqmWavs_nNxH7_qQng230OA7qkmbPvfbz-MWMu6tw1Fjn7dPLk2udk-2qBfTgKLCqQyL7FY8Ffve3x70Vo0uE5YxoRB4mQhuPtNh38Xvw-5lDMD2Xcj5yFjoECxomod3oitoP5sYYYSHD9FRak1JLqe2pqbKwy07i5VJeSDahZ9HLLflrk9hrN0Wtqi1YxxiJICNoqPNOJ4DOf4k-RtSBrqKc5Sys90Rk-aY-wUwvMJaUgbV981FODCRhyNB3wzX9ATB-J8AW09zaAKLtVwcvg9IhGugPGJZoQ4TLwf7vonNEVsSKNusnRHR-uVtI1E3tSiD57iP8pCn0XIXe5RnXRlfnDkdKBVAHaak68SKknd1WaXZxuy5UTtDYJXp0jOTJ4B2xGBb2L6POJtePKClxehwPoo8HDilkGc9pm-VabwyfppmGMDT_hAICuzqKrHrh5ZJv__AlsgYSsHpvevadrY9aC1Qz6hKBhvM19Sipe7sBty0UF0m_2WijG1o-n5D4Nh9Sk3THXEdnR864HBM0mxiko1xNnSfEvfDxL_rVyYjRvF_4g",
+    "proof": {
+      "algorithm": "ES256",
+      "deviceKeyId": "ovtxmjezf_VAbPdkdxg0V9WRJwWmNuCAIO507A9_BSU",
+      "signature": "6dCcI95FzWGPtNr8gIzZqoAchpYvbzCFFuGtVF-Qz3-VUR0k5ptQF0COUIc4u-Rz7HxLOyAlUklfCc_Lp7MDow"
+    }
+  }
+}

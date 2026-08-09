@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>CSBOARD - Trade History</title>
+  <title>csboard - Trade History</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #1b2838; color: #c6d4df; font-family: Arial, Helvetica, sans-serif; min-width: 800px; padding: 20px; }
@@ -35,7 +35,9 @@
     .item img { width: 48px; height: 48px; border-radius: 3px; }
     .item-info { display: flex; flex-direction: column; }
     .item-name { font-size: 11px; color: #c6d4df; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .item-price { font-size: 11px; color: #8bb9e0; }
+    .item-icon { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
+.item-price { font-size: 11px; color: #8bb9e0; }
+.item-qty { font-size: 11px; color: #7a8b99; margin-left: 6px; }
 
     .exchange { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px; }
     .exchange-icon { font-size: 24px; }
@@ -58,7 +60,7 @@
 </head>
 <body>
   <h1>
-    <span class="logo">CSBOARD</span> Trade History
+    <span class="logo">csboard</span> Trade History
     <span class="summary" id="summary"></span>
   </h1>
   <div class="controls">

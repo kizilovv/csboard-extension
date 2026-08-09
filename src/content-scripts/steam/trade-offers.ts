@@ -3,9 +3,9 @@
 // ============================================================
 // Injected on: steamcommunity.com/*/tradeoffers*
 //
-// Architecture: cs2trader approach
-// 1. Read data-loyalty_webapi_token from #application_config
-// 2. Send token to background → IEconService/GetTradeOffers/v1
+// Architecture: fixed internal read-provider approach
+// 1. Ask the background for normalized offers (no credential in messages)
+// 2. Background's private provider injects its memory-only credential
 // 3. Background returns items with market_hash_name from descriptions
 // 4. Match items to DOM elements by classid/instanceid/side/position
 // 5. Look up prices from priceEngine, display overlays
@@ -15,11 +15,28 @@
 import { priceEngine } from '../../shared/price-engine';
 import { createLogger } from '../../shared/logger';
 import { injectScript, injectStyle } from '../../shared/inject';
-import { addSSTandExtIndicators, makeItemColorful, addFloatIndicator, addDopplerPhase, addPatternIndicator, getBuffLink, getCsFloatLink } from '../../shared/items';
+import { addSSTandExtIndicators, makeItemColorful, addFloatIndicator, addDopplerPhase, addPatternIndicator, getBuffLink, buildCsfloatSearchUrl } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
+import { readSteamPageCredential } from '../../shared/steam-page-credential';
+import { sendMessageIfContextAlive } from '../../shared/message-bus';
 
 const logger = createLogger('trade-offers-list');
+
+/**
+ * The router answers a rejected handler with a plain string, and `String(err)`
+ * on that gives "[object Object]" in a screenshot. Users report what the
+ * console shows, so the console has to show the cause.
+ */
+function describeError(err: unknown): string {
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return err.message;
+  try {
+    return JSON.stringify(err) ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 // ============================================================
 // Page type detection (cs2trader pattern)
@@ -33,26 +50,6 @@ function detectPageType(): PageType {
 }
 
 const activePage = detectPageType();
-
-// ============================================================
-// Steam Access Token (cs2trader: refreshSteamAccessToken)
-// ============================================================
-// Reads data-loyalty_webapi_token from #application_config DOM element.
-// This is a DOM attribute, accessible from content scripts.
-
-function getSteamAccessToken(): string | null {
-  const token = document.getElementById('application_config')
-    ?.getAttribute('data-loyalty_webapi_token')
-    ?.replace(/"/g, '');
-
-  if (!token) {
-    logger.warn('Steam access token not found in #application_config');
-    return null;
-  }
-
-  logger.debug('Steam access token found', { length: token.length });
-  return token;
-}
 
 // ============================================================
 // ShowTradeOffer Override (injectScriptAsFile — bypass Steam CSP)
@@ -91,6 +88,7 @@ function getLimitedIDsFromElement(el: Element): LimitedIDs {
 
 interface SteamItem {
   appid: number | string;
+  assetid?: string;
   classid: string;
   instanceid: string;
   position: number;
@@ -99,21 +97,45 @@ interface SteamItem {
   offerOrigin: 'sent' | 'received';
   market_hash_name?: string;
   name?: string;
+  type?: string;
+  tags?: any[];
+  icon_url?: string;
+  floatValue?: number | null;
+  paintSeed?: number | null;
+  defIndex?: number | null;
+  paintIndex?: number | null;
   [key: string]: unknown;
 }
 
-function findItem(items: SteamItem[], ids: LimitedIDs, side: string, position: number): SteamItem | undefined {
-  if (ids.instanceid !== null) {
-    return items.find(
-      (item) =>
-        String(item.appid) === ids.appid &&
-        item.classid === ids.classid &&
-        item.instanceid === ids.instanceid &&
-        item.position === position &&
-        item.side === side
-    );
-  }
-  return items.find((item) => item.classid === ids.classid);
+const buildCsfloatUrlForOfferItem = (item: SteamItem): string => {
+  const marketHashName = item.market_hash_name || item.name || '';
+  const dopplerPhase = item.icon_url ? getDopplerInfo(item.icon_url)?.name : undefined;
+  return buildCsfloatSearchUrl({
+    assetId: item.assetid,
+    marketHashName,
+    defIndex: item.defIndex,
+    paintIndex: item.paintIndex,
+    paintSeed: item.paintSeed,
+    floatValue: item.floatValue,
+    dopplerPhase,
+    itemType: item.type,
+    tags: item.tags,
+  });
+};
+
+function findItem(
+  items: SteamItem[],
+  ids: LimitedIDs,
+  side: string,
+  position: number,
+  offerId: string | null,
+): SteamItem | undefined {
+  return items.find((item) => {
+    if (String(item.appid) !== ids.appid || item.classid !== ids.classid) return false;
+    if (ids.instanceid !== null && item.instanceid !== ids.instanceid) return false;
+    if (item.position !== position || item.side !== side) return false;
+    return offerId === null || item.inOffer === offerId;
+  });
 }
 
 // ============================================================
@@ -143,16 +165,9 @@ class TradeOffersListScript {
     // 3. Inject ShowTradeOffer override
     injectShowTradeOfferOverride();
 
-    // 4. Get Steam access token from page
-    const accessToken = getSteamAccessToken();
-    if (!accessToken) {
-      logger.error('Cannot fetch trade offers: no access token');
-      return;
-    }
-
-    // 4. Fetch trade offers via background (IEconService API)
+    // 4. Fetch trade offers via the background's fixed read provider.
     try {
-      const response = await this.fetchTradeOffers(accessToken);
+      const response = await this.fetchTradeOffers();
       if (!response || !response.items) {
         logger.warn('No items returned from Steam API');
         return;
@@ -181,7 +196,11 @@ class TradeOffersListScript {
         logger.warn('Float enrichment failed', { error: String(err) });
       });
     } catch (err) {
-      logger.error('Failed to fetch trade offers', { error: String(err) });
+      // Steam data is an enhancement, not a precondition. Losing it used to
+      // abort init() and leave the page with no prices, no rarity colours and
+      // no links at all — a total blackout caused by one failed request.
+      logger.error(`Failed to fetch trade offers: ${describeError(err)}`);
+      this.addQuickAcceptAndDeclineButtons();
     }
   }
 
@@ -217,7 +236,7 @@ class TradeOffersListScript {
 
   // --- Fetch via background ---
 
-  private fetchTradeOffers(accessToken: string): Promise<{
+  private fetchTradeOffers(): Promise<{
     offers: {
       trade_offers_received: any[];
       trade_offers_sent: any[];
@@ -228,7 +247,14 @@ class TradeOffersListScript {
       chrome.runtime.sendMessage(
         {
           type: 'FETCH_STEAM_TRADE_OFFERS',
-          data: { accessToken, activesOnly: 1, sent: 1, received: 1 },
+          data: {
+            activesOnly: 1,
+            sent: 1,
+            received: 1,
+            // First-party credential from this page's own DOM; the worker
+            // cannot always mint one (blocked third-party cookies).
+            ...(readSteamPageCredential() ?? {}),
+          },
         },
         (response) => {
           if (chrome.runtime.lastError) {
@@ -284,7 +310,9 @@ class TradeOffersListScript {
       });
 
       const ids = getLimitedIDsFromElement(el);
-      const item = findItem(items, ids, side, position);
+      const offerContainer = el.closest<HTMLElement>('[id^="tradeofferid_"]');
+      const offerId = offerContainer?.id.replace(/^tradeofferid_/, '') || null;
+      const item = findItem(items, ids, side, position, offerId);
 
       if (item && item.market_hash_name) {
         // Doppler phase-specific pricing
@@ -330,6 +358,9 @@ class TradeOffersListScript {
           isStatrack,
           isSouvenir,
           tags: item.tags as any[] | undefined,
+          // The normalized offer read carries no Steam tag list, so the wear
+          // badge falls back to the name, which always spells it out.
+          marketHashName: item.market_hash_name as string | undefined,
           stickerTotal,
         });
 
@@ -346,8 +377,8 @@ class TradeOffersListScript {
 
         // Add marketplace links (BUFF, CSFloat) — inject into Steam's popup
         const linksHtml = `
-          <a class="csboard-item-link" href="${getBuffLink(item.market_hash_name)}" target="_blank">BUFF</a>
-          <a class="csboard-item-link" href="${getCsFloatLink(item.market_hash_name)}" target="_blank">CSFloat</a>
+          <a class="csboard-item-link" href="${getBuffLink(item.market_hash_name)}" target="_blank" rel="noopener noreferrer">BUFF</a>
+          <a class="csboard-item-link csboard-csfloat-link" href="${buildCsfloatUrlForOfferItem(item)}" target="_blank" rel="noopener noreferrer">CSFloat</a>
         `;
         el.insertAdjacentHTML('beforeend', `<div class="csboard-item-links">${linksHtml}</div>`);
       }
@@ -523,7 +554,7 @@ class TradeOffersListScript {
 
     // Trade History button
     document.getElementById('csboard-trade-history-btn')?.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'OPEN_TRADE_HISTORY' });
+      sendMessageIfContextAlive({ type: 'OPEN_TRADE_HISTORY' });
     });
 
     // Load saved default sort
@@ -543,9 +574,6 @@ class TradeOffersListScript {
 
   // --- Enrich items with float via Steam APIs ---
   private async enrichWithFloat(items: SteamItem[]) {
-    const accessToken = getSteamAccessToken();
-    if (!accessToken) return;
-
     // Get our steamid
     const steamIdScript = "document.querySelector('body').setAttribute('mySteamId', typeof g_steamID !== 'undefined' ? g_steamID : '');";
     const mySteamId = injectScript(steamIdScript, true, 'getMySteamId', 'mySteamId');
@@ -557,7 +585,10 @@ class TradeOffersListScript {
       try {
         const result = await new Promise<any>((resolve, reject) => {
           chrome.runtime.sendMessage(
-            { type: 'FETCH_INVENTORY_WITH_PROPERTIES', data: { accessToken, steamId: mySteamId } },
+            {
+              type: 'FETCH_INVENTORY_WITH_PROPERTIES',
+              data: { steamId: mySteamId, ...(readSteamPageCredential() ?? {}) },
+            },
             (resp) => {
               if (chrome.runtime.lastError) { reject(chrome.runtime.lastError.message); return; }
               if (resp?.error) { reject(resp.error); return; }
@@ -566,9 +597,20 @@ class TradeOffersListScript {
           );
         });
         if (result?.items) {
-          const floatMap: Record<string, { fv: number; ps: number }> = {};
+          const floatMap: Record<string, { fv: number; ps: number | null; defIndex: number | null; paintIndex: number | null }> = {};
           for (const apiItem of result.items) {
-            if (apiItem.floatValue) floatMap[apiItem.assetid] = { fv: apiItem.floatValue, ps: apiItem.paintSeed };
+            const rawFloatValue = apiItem.floatValue;
+            const floatValue = rawFloatValue === null || rawFloatValue === undefined || rawFloatValue === ''
+              ? Number.NaN
+              : Number(rawFloatValue);
+            if (Number.isFinite(floatValue) && floatValue >= 0 && floatValue <= 1) {
+              floatMap[apiItem.assetid] = {
+                fv: floatValue,
+                ps: Number.isFinite(Number(apiItem.paintSeed)) ? Number(apiItem.paintSeed) : null,
+                defIndex: Number.isInteger(apiItem.defIndex) ? apiItem.defIndex : null,
+                paintIndex: Number.isInteger(apiItem.paintIndex) ? apiItem.paintIndex : null,
+              };
+            }
           }
           // Apply to DOM
           for (const item of items) {
@@ -577,12 +619,18 @@ class TradeOffersListScript {
             if (!aid) continue;
             const fdata = floatMap[aid];
             if (!fdata) continue;
+            item.floatValue = fdata.fv;
+            item.paintSeed = fdata.ps;
+            item.defIndex = fdata.defIndex;
+            item.paintIndex = fdata.paintIndex;
             // Find DOM element and add float
             const el = this.findItemElement(item);
             if (el && !el.querySelector('.floatIndicator')) {
               addFloatIndicator(el as HTMLElement, fdata.fv, 4);
               enriched++;
             }
+            const csfloatLink = el?.querySelector<HTMLAnchorElement>('.csboard-csfloat-link');
+            if (csfloatLink) csfloatLink.href = buildCsfloatUrlForOfferItem(item);
           }
           logger.info('Enriched OUR items on list', { apiItems: result.items.length, enriched });
         }

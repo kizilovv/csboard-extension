@@ -1,77 +1,117 @@
 # CSBOARD Extension
 
-Read-only price overlay for CS2 items on Steam Community pages and CSFloat. Open source, no tracking.
+CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combines price overlays, exact CSFloat lookups, opt-in Buff marketplace helpers, user-confirmed Steam Market listing tools, and optional encrypted portfolio synchronization.
 
 - Homepage: <https://csboard.com>
-- Privacy policy: <https://csboard.com/en/privacy>
-- Terms of service: <https://csboard.com/en/terms>
+- Privacy policy: [PRIVACY.md](PRIVACY.md)
+- Terms: <https://csboard.com/en/terms>
 - License: [MIT](LICENSE)
 
-## What it does
+## Features
 
-- Shows multi-source prices (Buff163, Steam, CSFloat, Skinport, DMarket, YouPin, Lisskins) on Steam inventory, market, trade-offer, and profile pages.
-- Overlays price/diff information on CSFloat listings.
-- Displays Steam trade history with USD values from local cache (Steam-side only — no server sync).
-- Optional: signs you in to CSBOARD via cookies to inherit your preferred currency / price source.
+- Multi-source prices on Steam inventory, market, trade-offer, history and profile surfaces.
+- One asset-aware CSFloat lookup builder with StatTrak/Souvenir category, wear, float, paint and lowest-price filters.
+- Popup settings for currency, price source, CSBOARD-settings sync and the CSBOARD comparison on CSFloat.
+- Opt-in BetterBuff-style helpers on Buff163: listing age, selected-currency display, explicit live-price comparisons and safe item/search links. The Buff surface is off by default and never uploads Buff responses.
+- Steam `Sell`, `Quick Sell`, `Instant Sell` and sequential bulk review. Every write is initiated and confirmed by the user and goes directly to Steam.
+- Optional CSFolder-authorized portfolio pairing and manual synchronization of normalized own-inventory contexts `2` and `16`, trade-offer summaries and trade-history summaries. Offer reads deterministically keep the newest 1,000 records and surface a non-fatal popup warning if Steam returns more.
+- P2P eligibility plus reviewed publish/unpublish for the user's CSBOARD listing. Version 1.1 has no P2P buy/order/settlement capability and does not let CSBOARD or a website create, accept or confirm a Steam trade.
 
-## Endpoints used
+## Security boundary
 
-Only public/auth endpoints that exist on production:
+- `onMessageExternal` exposes only a bounded `GET_EXTENSION_STATUS` response to the two exact CSBOARD origins. It cannot reach storage, Steam reads, selling or trade handlers.
+- Steam cookies, `sessionid`, access/session tokens, passwords and Steam Guard/shared/identity secrets never leave the browser and never enter the sync outbox.
+- A narrow internal read-session provider can add a session-only Steam credential only to fixed read operations. Callers never receive the credential.
+- Opt-in portfolio chunks are validated and scanned, then encrypted before `fetch()` with the versioned CSBOARD HPKE gateway protocol and signed by a non-extractable per-install device key.
+- Before chunking, redundant localized inventory `name` and per-asset Steam CDN `iconUrl` fields are omitted. Canonical market name, composite app/context/asset identity and all ownership, hold, wear, paint and sticker facts needed for reconciliation/P2P remain intact; this keeps a metadata-rich 5,000-item snapshot inside the fixed 64-chunk contract.
+- The backend re-checks signatures, time windows, replay/idempotency and the same secret denylist after decrypt. Missing production key configuration fails closed; there is no plaintext fallback.
+- All extension executable code is bundled in the Manifest V3 artifact. No remote JavaScript or WebAssembly is loaded.
 
-| Endpoint | Purpose |
+## Network destinations
+
+| Destination | Purpose |
 |---|---|
-| `GET  /api/extension/prices` | Full price dump (~MB, cached, 5-min ETag) |
-| `GET  /api/extension/exchange-rates` | Currency conversion rates |
-| `GET  /api/auth/me` | Cookie-based user check (currency + priceSource sync) |
-| `POST /api/auth/logout` | Clear session cookie |
+| CSBOARD `/api/extension/*` | Public price/rate feeds and extension health |
+| CSBOARD `/api/auth/*` | Optional cookie-authenticated user/settings and logout |
+| CSBOARD `/api/extension/v2/*` | Opt-in encrypted pairing confirmation, device status/revoke and normalized portfolio ingestion |
+| CSBOARD `/api/p2p/*` | Cookie-authenticated eligibility and separately reviewed listing publish/unpublish only |
+| Steam Community / Web API | Page overlays, fixed authenticated reads and direct user-confirmed market actions |
+| CSFloat | The visited marketplace page, its public metadata, and exact search links |
+| Buff163 | Opt-in local enhancement of the visited Buff page and its same-origin marketplace responses |
 
-That's it. Everything else is direct Steam Web API or local computation.
+The pairing code is generated in the user's authenticated CSFolder portfolio,
+not by CSBOARD. The extension opens that normal web page but has no CSFolder
+host permission and does not call the CSFolder consume API. It places the code
+only inside the HPKE-encrypted `pair/confirm` envelope; CSBOARD then validates
+the one-time assertion through a dedicated TLS + HMAC server-to-server call to
+CSFolder and durably binds the returned SteamID64. There is no CSBOARD
+`/pair/create` route.
 
-## Geo-aware domain resolution
+Steam Market writes are never proxied through CSBOARD. Portfolio uploads use
+`credentials: omit` after device pairing and are accepted only by the dedicated
+protected gateway.
 
-Production CSBOARD is geo-routed at nginx:
-- `csboard.com` — non-RU traffic (canonical).
-- `csboard.trade` — RU traffic (no VPN required).
+## Build and verification
 
-When a visitor's geo doesn't match the domain, nginx 302's them to the other host. `fetch(credentials:'include')` strips cookies on cross-origin redirects and POST bodies don't survive 302 reliably — so the extension can't just point at one domain.
-
-On first run the extension probes both with `redirect: 'error'`. The one that does NOT 302 is the user's local host, and the choice is cached in `chrome.storage.local` for 24h. See [`src/shared/config.ts`](src/shared/config.ts).
-
-## Build
-
-```
+```bash
 npm install
+npm run typecheck
+npm test
 npm run build
+npm run audit:capabilities
+npm run test:artifact
 ```
 
-Output: `build/` (load as unpacked extension in Chrome).
+Output is `build/`, which can be loaded as an unpacked Chrome extension. A Store candidate additionally requires pinned production gateway configuration:
+
+```bash
+CSBOARD_EXTENSION_BUILD_PROFILE=store \
+CSBOARD_GATEWAY_HOSTS=https://csboard.com,https://csboard.trade \
+CSBOARD_GATEWAY_ROOT_JWK='{"kty":"EC","crv":"P-256","kid":"…","x":"…","y":"…"}' \
+npm run build:store
+npm run package:store
+```
+
+`package:store` re-runs the packaged capability tests, requires a clean commit,
+and writes a deterministic Store zip, SHA-256 file, normalized SPDX SBOM,
+SBOM SHA-256 and provenance JSON under `artifacts/releases/`. The provenance
+binds the archive, source commit, build profile and SBOM digest. The build
+variable contains only the public discovery root; HPKE and discovery private
+keys remain backend-only.
+
+Without the owner-provided public root, build the explicit local preflight:
+
+```bash
+npm run build
+npm run package:preflight
+```
+
+That deterministic archive contains `UNCONFIGURED-NOT-FOR-WEB-STORE.txt`.
+Lookup, settings and local Steam UI can be reviewed unpacked, while protected
+portfolio sync fails closed. The repository does not contain production private
+keys. Store upload, production migrations and deployment are separate
+owner-approved actions.
 
 ## Layout
 
-```
+```text
 src/
-  manifest.json            # MV3 manifest
-  background/
-    service-worker.ts      # Message router + price/exchange-rate refresh
-  content-scripts/
-    steam/                 # Inventory/market/trade-offer/profile overlays
-    csfloat/               # CSFloat listing overlay
-  pages/
-    trade-history.html     # Local-only trade history viewer
-  popup/                   # Extension popup
-  shared/
-    api.ts                 # Auth-only API client (rate-limited, cookie-based)
-    config.ts              # Geo-aware origin resolver
-    price-engine.ts        # In-memory price cache + multi-currency formatting
-    ...
+  background/       internal router, Steam read provider, collector, HPKE gateway/outbox
+  content-scripts/  Steam, CSFloat and opt-in Buff163 UI
+  popup/            settings, pairing and manual-sync UI
+  shared/           schemas, pricing, lookup and normalized contracts
+scripts/            release/config/capability gates
+test/               source-level unit and contract tests
+test-artifact/      black-box tests against the real bundled service worker
 ```
+
+See [docs/SYSTEM-MAP-PORTFOLIO-P2P.md](docs/SYSTEM-MAP-PORTFOLIO-P2P.md),
+[CHANGELOG.md](CHANGELOG.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for the implemented integration map, release notes and dependency notices.
+The separately gated future settlement threat model is documented in
+[docs/SPEC-FUTURE-P2P-STEAM-ACTION-SETTLEMENT.md](docs/SPEC-FUTURE-P2P-STEAM-ACTION-SETTLEMENT.md);
+it is not implementation authority and is not part of version 1.1.
 
 ## Privacy
 
-- No telemetry, no analytics, no third-party trackers.
-- Cookies sent only on requests to `csboard.com` / `csboard.trade` (your CSBOARD session) and `steamcommunity.com` (Steam session).
-- Steam access tokens are stored encrypted at rest (AES-GCM with a session key, see [`src/shared/crypto.ts`](src/shared/crypto.ts)).
-
-## License
-
-MIT.
+There is no advertising, behavioral analytics or remote telemetry by default. Portfolio synchronization is disabled until the user pairs and explicitly enables it; source toggles are independent. See [PRIVACY.md](PRIVACY.md) for the exact collected fields and exclusions.

@@ -11,12 +11,14 @@
 // (background/service-worker.ts) against /api/extension/*.
 
 import type { AuthState, UserProfile } from './types';
-import { CSBoardError } from './types';
+import { CSBoardError, SteamId64, normalizeAvatarUrl } from './types';
 import { type Result, Ok, Fail } from './result';
 import { createLogger } from './logger';
 import { getApiBase } from './config';
 
 const logger = createLogger('api');
+
+export { normalizeAvatarUrl } from './types';
 
 const RETRY_CONFIG = {
   maxRetries: 3,
@@ -192,11 +194,70 @@ function sleep(ms: number): Promise<void> {
 // Public API
 // ============================================================
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Returns the user object from the production `/auth/me` envelope. A flat
+ * object remains accepted while old CSBOARD deployments roll forward.
+ */
+export function unwrapAuthMeUserPayload(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const candidate = Object.prototype.hasOwnProperty.call(value, 'user') ? value.user : value;
+  return isRecord(candidate) ? candidate : null;
+}
+
+function requiredDisplayString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Converts the production `{ user: ... }` `/auth/me` envelope into the small,
+ * stable profile contract used inside the extension. A flat payload remains
+ * supported for older CSBOARD deployments during rolling upgrades.
+ */
+export function normalizeAuthMePayload(value: unknown): UserProfile | null {
+  const candidate = unwrapAuthMeUserPayload(value);
+  if (!candidate) return null;
+
+  const id = requiredDisplayString(candidate.id, 128);
+  const name = requiredDisplayString(candidate.name ?? candidate.username, 128);
+  if (!id || !name) return null;
+
+  const steamId = typeof candidate.steamId === 'string' && /^\d{17}$/.test(candidate.steamId)
+    ? SteamId64(candidate.steamId)
+    : null;
+
+  return {
+    id,
+    steamId,
+    name,
+    avatar: normalizeAvatarUrl(candidate.avatar),
+    isPremium: candidate.isPremium === true,
+    balance: finiteNumberOr(candidate.balanceUsd ?? candidate.balance, 0),
+    frozenBalance: finiteNumberOr(candidate.frozenBalance, 0),
+  };
+}
+
 export async function getAuthStatus(): Promise<AuthState> {
-  const result = await apiFetch<UserProfile>('/auth/me');
+  const result = await apiFetch<unknown>('/auth/me');
 
   if (result.ok) {
-    return { isLoggedIn: true, user: result.value };
+    const user = normalizeAuthMePayload(result.value);
+    if (user) return { isLoggedIn: true, user };
+
+    logger.warn('Auth check returned an invalid profile envelope');
+    return { isLoggedIn: false };
   }
 
   if (result.error.code !== 'NETWORK_ERROR') {

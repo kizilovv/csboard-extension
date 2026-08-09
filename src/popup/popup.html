@@ -3,44 +3,276 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CSBOARD</title>
+  <title>csboard settings</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div id="app">
-    <div class="header">
-      <div class="logo">CSBOARD</div>
-      <div class="header-actions">
-        <span id="status-dot" class="status-dot offline"></span>
+    <header class="header">
+      <div>
+        <div class="logo">csboard</div>
+        <div class="header-subtitle">Extension settings</div>
       </div>
-    </div>
-
-    <div id="screen-login" class="screen">
-      <div class="login-container">
-        <p class="login-text">Sign in on the CSBOARD website to sync your price source and currency. Price overlays work without signing in.</p>
-        <a id="login-btn" class="btn btn-primary" href="#" target="_blank">Open CSBOARD</a>
-        <p class="login-hint">After signing in, reopen this popup</p>
+      <div class="connection-pill" aria-live="polite">
+        <span id="status-dot" class="status-dot offline" aria-hidden="true"></span>
+        <span id="connection-label">Checking…</span>
       </div>
-    </div>
+    </header>
 
-    <div id="screen-main" class="screen hidden">
-      <div class="user-bar">
-        <img id="user-avatar" class="avatar" src="" alt="">
-        <div class="user-info">
-          <span id="user-name" class="user-name"></span>
-          <span id="user-badge" class="badge premium hidden">PREMIUM</span>
+    <main>
+      <section class="card auth-card" aria-labelledby="account-heading">
+        <div class="section-heading-row">
+          <div>
+            <p class="eyebrow">Account</p>
+            <h1 id="account-heading" class="card-title">csboard connection</h1>
+          </div>
+          <a id="login-btn" class="btn btn-secondary btn-compact" href="#" target="_blank" rel="noopener noreferrer">Open csboard</a>
         </div>
-      </div>
-
-      <div class="prices-status" id="prices-status">
-        <div class="prices-info">
-          <span id="prices-count">—</span>
-          <span class="prices-sep">·</span>
-          <span id="prices-updated">—</span>
+        <div id="auth-user" class="user-bar hidden">
+          <span id="user-avatar-fallback" class="avatar avatar-fallback" aria-hidden="true">?</span>
+          <img id="user-avatar" class="avatar avatar-image hidden" alt="" referrerpolicy="no-referrer">
+          <div class="user-info">
+            <span id="user-name" class="user-name"></span>
+            <span id="user-badge" class="badge hidden">Premium</span>
+          </div>
         </div>
-        <button id="refresh-prices-btn" class="btn btn-small">Refresh</button>
-      </div>
-    </div>
+        <p id="auth-detail" class="supporting-text">Checking your csboard session…</p>
+      </section>
+
+      <section class="card" aria-labelledby="prices-heading">
+        <div class="section-heading-row">
+          <div>
+            <p class="eyebrow">Prices</p>
+            <h2 id="prices-heading" class="card-title">Display preferences</h2>
+          </div>
+          <button id="sync-preferences-btn" class="text-button" type="button">Sync now</button>
+        </div>
+
+        <div class="field-grid">
+          <label class="field" for="currency-select">
+            <span class="field-label">Currency</span>
+            <select id="currency-select" disabled>
+              <option value="USD">USD — $</option>
+              <option value="EUR">EUR — €</option>
+              <option value="GBP">GBP — £</option>
+              <option value="CNY">CNY — ¥</option>
+              <option value="RUB">RUB — ₽</option>
+              <option value="UAH">UAH — ₴</option>
+              <option value="BRL">BRL — R$</option>
+              <option value="TRY">TRY — ₺</option>
+              <option value="PLN">PLN — zł</option>
+              <option value="KZT">KZT — ₸</option>
+              <option value="CAD">CAD — C$</option>
+              <option value="AUD">AUD — A$</option>
+              <option value="JPY">JPY — ¥</option>
+              <option value="KRW">KRW — ₩</option>
+              <option value="INR">INR — ₹</option>
+            </select>
+          </label>
+
+          <label class="field" for="price-source-select">
+            <span class="field-label">Price source</span>
+            <select id="price-source-select" disabled>
+              <option value="buff163">Buff163 Ask</option>
+              <option value="buff163_buy">Buff163 Buy</option>
+              <option value="steam">Steam</option>
+              <option value="skinport">Skinport</option>
+              <option value="dmarket">DMarket</option>
+              <option value="csfloat">CSFloat</option>
+              <option value="youpin">YouPin</option>
+              <option value="lisskins">Lisskins</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="setting-row">
+          <span>
+            <span class="setting-title">Follow settings from csboard</span>
+            <span id="preference-sync-status" class="setting-description">Loading preference sync state…</span>
+          </span>
+          <span class="switch">
+            <input id="sync-preferences-toggle" type="checkbox" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </span>
+        </label>
+      </section>
+
+      <section class="card" aria-labelledby="integrations-heading">
+        <p class="eyebrow">Integrations</p>
+        <h2 id="integrations-heading" class="card-title">Marketplace overlays</h2>
+        <label class="setting-row">
+          <span>
+            <span class="setting-title">Show csboard prices on CSFloat</span>
+            <span class="setting-description">Controls only the csboard overlay on csfloat.com.</span>
+          </span>
+          <span class="switch">
+            <input id="csfloat-overlay-toggle" type="checkbox" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </span>
+        </label>
+        <label class="setting-row">
+          <span>
+            <span class="setting-title">Enable BetterBuff tools on Buff163</span>
+            <span class="setting-description">Adds listing age, price comparison, converted prices, and safe item links. Off by default.</span>
+          </span>
+          <span class="switch">
+            <input id="betterbuff-toggle" type="checkbox" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </span>
+        </label>
+      </section>
+
+      <section class="card" aria-labelledby="portfolio-heading">
+        <div class="section-heading-row">
+          <div>
+            <p class="eyebrow">CSFolder</p>
+            <h2 id="portfolio-heading" class="card-title">Secure CSFolder portfolio sync</h2>
+          </div>
+          <span id="portfolio-state-badge" class="state-badge neutral">Checking</span>
+        </div>
+
+        <p id="portfolio-summary" class="supporting-text">Checking pairing status…</p>
+        <p id="portfolio-account" class="mono-detail hidden"></p>
+
+        <form id="pair-form" class="pair-form hidden" autocomplete="off">
+          <label class="field" for="pairing-code-input">
+            <span class="field-label">One-time pairing code</span>
+            <span class="input-with-button">
+              <input id="pairing-code-input" type="text" inputmode="text" maxlength="64" spellcheck="false" placeholder="Enter code from CSFolder" required>
+              <button id="pair-device-btn" class="btn btn-primary btn-compact" type="submit">Pair</button>
+            </span>
+            <span class="pair-help">Generate a 5-minute code in your
+              <a class="text-button" href="https://csfolder.com/portfolio?utm_source=csboard_extension&amp;utm_medium=pairing" target="_blank" rel="noopener noreferrer">CSFolder portfolio</a>.
+            </span>
+          </label>
+        </form>
+
+        <label id="portfolio-enable-row" class="setting-row hidden">
+          <span>
+            <span class="setting-title">Enable portfolio uploads</span>
+            <span class="setting-description">Off by default. Only enabled sources are included in a manual sync.</span>
+          </span>
+          <span class="switch">
+            <input id="portfolio-sync-toggle" type="checkbox" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </span>
+        </label>
+
+        <fieldset id="portfolio-sources" class="source-list" disabled>
+          <legend class="sr-only">Portfolio data sources</legend>
+          <label class="source-row">
+            <span>
+              <span class="setting-title">All Inventory</span>
+              <span id="source-inventory-status" class="setting-description">Off</span>
+            </span>
+            <input id="source-inventory" type="checkbox" data-source="inventory">
+          </label>
+          <label class="source-row">
+            <span>
+              <span class="setting-title">Trade History</span>
+              <span id="source-trade-history-status" class="setting-description">Off</span>
+            </span>
+            <input id="source-trade-history" type="checkbox" data-source="tradeHistory">
+          </label>
+        </fieldset>
+
+        <div id="portfolio-metrics" class="metrics hidden">
+          <div>
+            <span class="metric-label">Last success</span>
+            <span id="portfolio-last-success" class="metric-value">Never</span>
+          </div>
+          <div>
+            <span class="metric-label">Last attempt</span>
+            <span id="portfolio-last-attempt" class="metric-value">Never</span>
+          </div>
+          <div>
+            <span class="metric-label">Queued</span>
+            <span id="portfolio-queued" class="metric-value">0 records</span>
+          </div>
+        </div>
+
+        <div id="portfolio-actions" class="button-row hidden">
+          <button id="sync-portfolio-btn" class="btn btn-primary" type="button">Sync now</button>
+          <button id="unpair-device-btn" class="btn btn-danger-quiet" type="button">Unpair</button>
+        </div>
+
+        <details class="privacy-disclosure">
+          <summary>What is uploaded?</summary>
+          <p>Only normalized item, hold, trade, and market facts from the sources you enable. Steam cookies, session tokens, passwords, Guard secrets, and raw authenticated pages never leave this browser.</p>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="p2p-heading">
+        <div class="section-heading-row">
+          <div>
+            <p class="eyebrow">P2P market</p>
+            <h2 id="p2p-heading" class="card-title">Publish your item</h2>
+          </div>
+          <div class="heading-actions">
+            <span id="p2p-state-badge" class="state-badge neutral">Checking</span>
+            <button id="refresh-p2p-btn" class="text-button" type="button" disabled>Refresh</button>
+          </div>
+        </div>
+
+        <p id="p2p-summary" class="supporting-text">Checking current P2P eligibility…</p>
+
+        <div id="p2p-workspace" class="p2p-workspace hidden">
+          <label class="field" for="p2p-asset-select">
+            <span class="field-label">Your synced asset</span>
+            <select id="p2p-asset-select" disabled></select>
+          </label>
+
+          <div id="p2p-asset-detail" class="p2p-asset-detail">
+            <span id="p2p-asset-name" class="setting-title"></span>
+            <span id="p2p-snapshot-time" class="setting-description"></span>
+            <ul id="p2p-reasons" class="reason-list" aria-live="polite"></ul>
+          </div>
+
+          <label id="p2p-price-field" class="field" for="p2p-price-input">
+            <span class="field-label">Listing price (USD)</span>
+            <span class="price-input-wrap">
+              <span aria-hidden="true">$</span>
+              <input id="p2p-price-input" type="text" inputmode="decimal" maxlength="9" placeholder="0.00" autocomplete="off" disabled>
+            </span>
+            <span class="setting-description">Allowed range: $0.10–$100,000.00.</span>
+          </label>
+
+          <button id="review-p2p-btn" class="btn btn-primary btn-full" type="button" disabled>Review publish</button>
+        </div>
+
+        <div id="p2p-review" class="p2p-review hidden" role="region" aria-labelledby="p2p-review-heading">
+          <p class="eyebrow">Required review</p>
+          <h3 id="p2p-review-heading" class="card-title">Confirm exact listing terms</h3>
+          <dl class="review-grid">
+            <div><dt>Action</dt><dd id="p2p-review-action">—</dd></div>
+            <div><dt>Item</dt><dd id="p2p-review-item">—</dd></div>
+            <div><dt>Price</dt><dd id="p2p-review-price">—</dd></div>
+            <div><dt>Terms</dt><dd id="p2p-review-terms">—</dd></div>
+          </dl>
+          <p id="p2p-review-expiry" class="setting-description"></p>
+          <p class="p2p-safety-note">This only publishes or unpublishes your listing. It cannot buy, create an order, or perform a Steam action.</p>
+          <div class="button-row">
+            <button id="confirm-p2p-btn" class="btn btn-primary" type="button">Confirm publish</button>
+            <button id="cancel-p2p-review-btn" class="btn btn-secondary" type="button">Cancel</button>
+          </div>
+        </div>
+
+        <details class="privacy-disclosure">
+          <summary>How confirmation works</summary>
+          <p>Review creates a one-time intent bound to this asset revision, USD price, terms, and idempotency key. It stays only in service-worker memory for at most two minutes. Confirm is a separate click.</p>
+        </details>
+      </section>
+
+      <section class="card data-card" aria-label="Price data status">
+        <div>
+          <span id="prices-count" class="setting-title">Price data: —</span>
+          <span id="prices-updated" class="setting-description">Checking cache…</span>
+        </div>
+        <button id="refresh-prices-btn" class="btn btn-secondary btn-compact" type="button">Refresh</button>
+      </section>
+
+      <div id="popup-notice" class="notice hidden" role="status" aria-live="polite"></div>
+    </main>
   </div>
 
   <script type="module" src="popup.ts"></script>

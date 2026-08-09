@@ -211,7 +211,7 @@ class MarketScript {
     // `/item/<name>` was never a real route — the item page is
     // `/<locale>/items/<slug>`. getCsboardLink() is the single source for it.
     parts.push(`
-      <a href="${getCsboardLink(this.itemName)}" target="_blank" class="csboard-view-btn">
+      <a href="${getCsboardLink(this.itemName)}" target="_blank" rel="noopener noreferrer" class="csboard-view-btn">
         View on CSBOARD
       </a>
     `);

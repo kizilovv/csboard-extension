@@ -13,8 +13,12 @@
 // All prices from local cache — zero external API calls.
 
 import { priceEngine, CURRENCIES } from '../../shared/price-engine';
-import { getBuffLink, getCsboardLink } from '../../shared/items';
+import { buildCsfloatSearchUrl, getBuffLink, getCsboardLink } from '../../shared/items';
 import { createLogger } from '../../shared/logger';
+import {
+  buildListingMetadataView,
+  type CsfloatListingMetadataText,
+} from '../../shared/csfloat-listing-metadata';
 
 const logger = createLogger('csfloat');
 
@@ -44,10 +48,18 @@ interface CSFAuctionDetails {
 
 interface CSFListing {
   id: string;
+  created_at?: string;
+  sold_at?: string;
+  state?: string;
   item: {
     market_hash_name: string;
     float_value?: number;
     phase?: string;
+    asset_id?: string;
+    def_index?: number | string;
+    paint_index?: number | string;
+    is_stattrak?: boolean | number;
+    is_souvenir?: boolean | number;
   };
   price: number; // cents — for auctions, equals reserve_price
   type?: 'buy_now' | 'auction';
@@ -77,8 +89,8 @@ let inventoryItems: CSFItem[] = [];
 
 // ============================================================
 // CSFloat site currency — intercepted from /v1/me + /v1/meta/exchange-rates.
-// Display all prices in this currency so our overlay matches whatever the
-// site is showing (user setting in extension popup is ignored on CSFloat).
+// Buff reference rows follow the host currency so they match CSFloat. The
+// separate CSBOARD quote panel follows the extension popup currency/source.
 // ============================================================
 let csfCurrency = 'USD';
 let csfRates: Record<string, number> = {}; // lowercase code → rate from USD
@@ -274,7 +286,7 @@ function parseCardDOM(card: Element): { name: string; float?: number } | null {
   const floatText = wearEl?.textContent?.trim();
   const float = floatText ? parseFloat(floatText) : undefined;
 
-  return { name, float: float && !isNaN(float) ? float : undefined };
+  return { name, float: Number.isFinite(float) ? float : undefined };
 }
 
 // Build a full listing from the DOM (BetterFloat getFloatItem pattern). Used on
@@ -284,6 +296,11 @@ function parseCardDOM(card: Element): { name: string; float?: number } | null {
 // suffix), the doppler phase, and the displayed price — everything our price
 // lookup + links need.
 const CSF_CONDITIONS = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred'];
+function currentDetailListingId(): string | null {
+  const match = location.pathname.match(/\/item\/([^/?#]+)/);
+  return match?.[1] ?? null;
+}
+
 function parseDetailListing(container: Element): CSFListing | null {
   const nameEl =
     container.querySelector('app-item-name .item-name') || container.querySelector('.item-name');
@@ -319,10 +336,10 @@ function parseDetailListing(container: Element): CSFListing | null {
   const floatVal = floatEl ? parseFloat(floatEl.textContent || '') : undefined;
 
   return {
-    id: '',
+    id: currentDetailListingId() ?? '',
     item: {
       market_hash_name: mhn,
-      float_value: floatVal && !isNaN(floatVal) ? floatVal : undefined,
+      float_value: Number.isFinite(floatVal) ? floatVal : undefined,
       phase,
     },
     price: cents,
@@ -384,7 +401,10 @@ function getItemData(card: Element): CSFListing | null {
   // name so a leftover popupItem from another item can't leak its price.
   if (kind === CardKind.PAGE) {
     const domItem = parseDetailListing(card);
-    if (popupItem && (!domItem || popupItem.item.market_hash_name === domItem.item.market_hash_name)) {
+    const routeListingId = currentDetailListingId();
+    const popupMatchesRoute = !routeListingId || popupItem?.id === routeListingId;
+    if (popupItem && popupMatchesRoute &&
+        (!domItem || popupItem.item.market_hash_name === domItem.item.market_hash_name)) {
       return popupItem;
     }
     return domItem;
@@ -448,6 +468,89 @@ function getItemData(card: Element): CSFListing | null {
 const BUFF_ICON = chrome.runtime.getURL('icons/buff163.png');
 const CSBOARD_ICON = chrome.runtime.getURL('icons/icon128.png');
 
+function mountNearPrice(card: Element, element: HTMLElement): void {
+  const topRight = card.querySelector<HTMLElement>('.top-right-container');
+  if (topRight) {
+    topRight.style.flexDirection = 'column';
+    topRight.style.alignItems = 'flex-end';
+    topRight.insertAdjacentElement('afterbegin', element);
+    return;
+  }
+
+  const priceEl = card.querySelector('.price-row') || card.querySelector('.price');
+  // Keep metadata owned by the card so a reused Angular item-card can remove
+  // stale Listed/Sold state. If the price row is a direct child, inserting
+  // after its parent would incorrectly place the badge outside <item-card>.
+  const priceParent = priceEl?.parentElement;
+  const anchor = priceParent && priceParent !== card ? priceParent : priceEl;
+  if (anchor) anchor.insertAdjacentElement('afterend', element);
+  else card.appendChild(element);
+}
+
+function resetListingMetadata(card: Element): void {
+  card.querySelectorAll('.csboard-listing-age, .csboard-sold-status').forEach((el) => el.remove());
+  const statusButton = card.querySelector<HTMLElement>('.csboard-sold-status-button');
+  const buttonLabel = statusButton?.querySelector<HTMLElement>('span.mdc-button__label');
+  const originalLabel = statusButton?.dataset['csboardOriginalLabel'];
+  const originalTitle = statusButton?.dataset['csboardOriginalTitle'];
+  if (statusButton && buttonLabel && originalLabel !== undefined) {
+    buttonLabel.textContent = originalLabel;
+    delete statusButton.dataset['csboardOriginalLabel'];
+  }
+  if (statusButton && originalTitle !== undefined) {
+    if (originalTitle) statusButton.title = originalTitle;
+    else statusButton.removeAttribute('title');
+    delete statusButton.dataset['csboardOriginalTitle'];
+  }
+  statusButton?.classList.remove('csboard-sold-status-button');
+}
+
+function injectSoldStatus(card: Element, sold: CsfloatListingMetadataText): void {
+  const statusButton = card.querySelector<HTMLElement>('.status-button');
+  const buttonLabel = statusButton?.querySelector<HTMLElement>('span.mdc-button__label');
+
+  if (statusButton?.hasAttribute('disabled') && buttonLabel) {
+    if (statusButton.dataset['csboardOriginalLabel'] === undefined) {
+      statusButton.dataset['csboardOriginalLabel'] = buttonLabel.textContent ?? '';
+    }
+    if (statusButton.dataset['csboardOriginalTitle'] === undefined) {
+      statusButton.dataset['csboardOriginalTitle'] = statusButton.getAttribute('title') ?? '';
+    }
+    statusButton.classList.add('csboard-sold-status-button');
+    buttonLabel.textContent = sold.label;
+    statusButton.title = sold.title;
+    return;
+  }
+
+  if (card.querySelector('.csboard-sold-status')) return;
+  const status = document.createElement('div');
+  status.className = 'csboard-sold-status';
+  status.title = sold.title;
+  status.textContent = sold.label;
+  mountNearPrice(card, status);
+}
+
+function injectListingMetadata(card: Element, listing: CSFListing): void {
+  if (detectCardKind(card) === CardKind.SELL) return;
+
+  const metadata = buildListingMetadataView({
+    createdAt: listing.created_at,
+    soldAt: listing.sold_at,
+    state: listing.state,
+    detail: detectCardKind(card) === CardKind.PAGE,
+  });
+  if (metadata.listed && !card.querySelector('.csboard-listing-age')) {
+    const age = document.createElement('div');
+    age.className = 'csboard-listing-age';
+    age.title = metadata.listed.title;
+    age.setAttribute('aria-label', age.title);
+    age.textContent = metadata.listed.label;
+    mountNearPrice(card, age);
+  }
+
+  if (metadata.sold) injectSoldStatus(card, metadata.sold);
+}
+
 // Throttled miss-logger — prints each unmatched name once per page so you can see
 // in DevTools which items our price blob doesn't cover (new items / name mismatch).
 const loggedMisses = new Set<string>();
@@ -488,8 +591,8 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
     ? (auction?.top_bid?.price ?? auction?.reserve_price ?? listing.price)
     : listing.price;
 
-  // Reformat Buff line in CSFloat site currency so our overlay matches the
-  // currency the user sees on the page (their extension setting is ignored here).
+  // Reformat the Buff reference in CSFloat's site currency. The CSBOARD quote
+  // below deliberately follows the independently selected extension currency.
   const orderDisplay = buyOrder?.cents ? formatCsfPrice(buyOrder.cents).display : '';
   const listingDisplay = bid?.cents ? formatCsfPrice(bid.cents).display : '';
 
@@ -536,7 +639,7 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
   buffLine.className = 'csboard-buff-a';
   buffLine.href = buffLink;
   buffLine.target = '_blank';
-  buffLine.rel = 'noopener';
+  buffLine.rel = 'noopener noreferrer';
   buffLine.title = `Buff163: ${marketHashName}`;
   // Store reference (Buff ASK) USD-cent and converted-currency value on element
   // for the sell dialog auto-pricing flow. Sell dialog uses USD by default for
@@ -578,6 +681,82 @@ function injectPriceOverlay(card: Element, listing: CSFListing): void {
 // CSBOARD's real minAsk per item — { "market_hash_name|phase": cents }, sourced
 // from the csgoskins.gg partner feed and refreshed by the background worker.
 let csboardPrices: Record<string, number> = {};
+let extensionExchangeRates: Record<string, number> = {};
+// Fail closed until the persisted setting is loaded. API responses can arrive
+// before initUI(), and must not briefly flash an overlay the user disabled.
+let showCsboardPricesOnCsfloat = false;
+let csboardPanelSettingsReady = false;
+let csboardPanelSettingsRevision = 0;
+const loggedExtensionCurrencyMisses = new Set<string>();
+
+function readShowCsboardPricesSetting(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return true;
+  const setting = (value as Record<string, unknown>)['showCsboardPricesOnCsfloat'];
+  return typeof setting === 'boolean' ? setting : true;
+}
+
+async function loadCsboardPanelSettings(): Promise<void> {
+  try {
+    const data = await chrome.storage.local.get([
+      'csboard_settings',
+      'csboard_exchange_rates',
+    ]);
+    showCsboardPricesOnCsfloat = readShowCsboardPricesSetting(data['csboard_settings']);
+    extensionExchangeRates = (data['csboard_exchange_rates'] as Record<string, number>) || {};
+    csboardPanelSettingsReady = true;
+  } catch (error) {
+    showCsboardPricesOnCsfloat = false;
+    csboardPanelSettingsReady = true;
+    logger.error('Failed to load CSFloat overlay settings', { error: String(error) });
+  }
+}
+
+function formatCsboardPriceInExtensionCurrency(
+  usdCents: number,
+): { display: string; currency: string } | null {
+  const currency = priceEngine.getSettings().currency.toUpperCase();
+  const currencyInfo = CURRENCIES[currency];
+  const rate = currency === 'USD' ? 1 : extensionExchangeRates[currency];
+
+  // Never relabel USD as another currency and never silently fall back. A
+  // missing/unsupported rate hides only the CSBOARD panel until a valid rate is
+  // available; the source price remains cached in USD cents.
+  if (
+    !currencyInfo ||
+    !Number.isFinite(usdCents) ||
+    usdCents <= 0 ||
+    typeof rate !== 'number' ||
+    !Number.isFinite(rate) ||
+    rate <= 0
+  ) {
+    if (!loggedExtensionCurrencyMisses.has(currency)) {
+      loggedExtensionCurrencyMisses.add(currency);
+      logger.warn('CSBOARD panel hidden: extension currency rate unavailable', { currency });
+    }
+    return null;
+  }
+
+  const converted = (usdCents / 100) * rate;
+  if (!Number.isFinite(converted)) return null;
+  const nf = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return {
+    display: `${currencyInfo.sign}${nf.format(converted)}`,
+    currency,
+  };
+}
+
+function repaintCsboardPanel(): void {
+  document.querySelectorAll('.csboard-panel').forEach((panel) => panel.remove());
+  if (!csboardPanelSettingsReady || !showCsboardPricesOnCsfloat) return;
+
+  const card = getMainDetailCard();
+  card?.removeAttribute('data-csboard-key');
+  syncDetailCard();
+}
+
 async function loadCsboardPrices(): Promise<void> {
   try {
     const d = await chrome.storage.local.get('csboard_prices');
@@ -589,14 +768,46 @@ function getCsboardPriceCents(marketHashName: string, phase?: string | null): nu
   const v = csboardPrices[`${marketHashName}|${phase ?? ''}`];
   return typeof v === 'number' && v > 0 ? v : null;
 }
-// Stay in sync when the background worker refreshes the feed. Force the detail
-// card to re-render so a panel that was hidden (map not loaded yet) can appear.
+// Stay in sync with both the price feed and live popup settings. Disabling is
+// synchronous: existing panels disappear before any async price-engine reload,
+// and injectCsboardPanel() blocks new ones until the latest revision is ready.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes['csboard_prices']) {
+  if (area !== 'local') return;
+
+  let shouldRepaint = false;
+  if (changes['csboard_prices']) {
     csboardPrices = (changes['csboard_prices'].newValue as Record<string, number>) || {};
-    getMainDetailCard()?.removeAttribute('data-csboard-key');
-    syncDetailCard();
+    shouldRepaint = true;
   }
+
+  if (changes['csboard_exchange_rates']) {
+    extensionExchangeRates =
+      (changes['csboard_exchange_rates'].newValue as Record<string, number>) || {};
+    loggedExtensionCurrencyMisses.clear();
+    shouldRepaint = true;
+  }
+
+  if (changes['csboard_settings']) {
+    const revision = ++csboardPanelSettingsRevision;
+    showCsboardPricesOnCsfloat = readShowCsboardPricesSetting(
+      changes['csboard_settings'].newValue,
+    );
+    csboardPanelSettingsReady = false;
+    repaintCsboardPanel();
+
+    void priceEngine.reload().then(() => {
+      if (revision !== csboardPanelSettingsRevision) return;
+      loggedExtensionCurrencyMisses.clear();
+      csboardPanelSettingsReady = true;
+      repaintCsboardPanel();
+    }).catch((error) => {
+      if (revision !== csboardPanelSettingsRevision) return;
+      logger.error('Failed to apply CSFloat overlay settings', { error: String(error) });
+    });
+    return;
+  }
+
+  if (shouldRepaint) repaintCsboardPanel();
 });
 
 // On a CSFloat item page (item-detail), inject a CSBOARD price + buy CTA
@@ -604,7 +815,54 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // user jumps straight to the same skin on CSBOARD. Only shown when CSBOARD is
 // competitive (not pricier than the CSFloat ask). Grid/similar/sell cards stay
 // Buff-line-only to avoid clutter.
+function positiveIndex(value: number | string | undefined): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function injectComparableCsfloatLookup(card: Element, listing: CSFListing): void {
+  if (detectCardKind(card) !== CardKind.PAGE || card.querySelector('.csboard-csfloat-lookup')) {
+    return;
+  }
+  const defIndex = positiveIndex(listing.item.def_index);
+  const paintIndex = positiveIndex(listing.item.paint_index);
+  const comparable = document.createElement('a');
+  comparable.className = 'csboard-csfloat-lookup';
+  comparable.href = buildCsfloatSearchUrl({
+    assetId: listing.item.asset_id || listing.id || undefined,
+    marketHashName: listing.item.market_hash_name,
+    defIndex,
+    paintIndex,
+    floatValue: listing.item.float_value,
+    dopplerPhase: listing.item.phase,
+    isStatTrak: listing.item.is_stattrak === true || listing.item.is_stattrak === 1,
+    isSouvenir: listing.item.is_souvenir === true || listing.item.is_souvenir === 1,
+  }, { mode: 'comparable', dynamicFloatForKnifeGlove: true });
+  comparable.target = '_blank';
+  comparable.rel = 'noopener noreferrer';
+  comparable.textContent = 'Find comparable listings on CSFloat';
+  comparable.style.cssText = [
+    'display:flex',
+    'justify-content:center',
+    'margin:8px 0',
+    'padding:8px 12px',
+    'border:1px solid rgba(126,193,255,.45)',
+    'border-radius:6px',
+    'color:#7ec1ff',
+    'font-weight:600',
+    'text-decoration:none',
+  ].join(';');
+
+  const priceEl = card.querySelector('.price-row') || card.querySelector('.price');
+  const anchor = card.querySelector('.csboard-buff-a') || priceEl?.parentElement || priceEl;
+  if (anchor) anchor.insertAdjacentElement('afterend', comparable);
+  else card.appendChild(comparable);
+}
+
 function injectCsboardPanel(card: Element, listing: CSFListing): void {
+  // This lookup remains useful even when CSBOARD has no quote for the item.
+  injectComparableCsfloatLookup(card, listing);
+  if (!csboardPanelSettingsReady || !showCsboardPricesOnCsfloat) return;
   if (detectCardKind(card) !== CardKind.PAGE) return;
   if (card.querySelector('.csboard-panel')) return;
 
@@ -628,9 +886,11 @@ function injectCsboardPanel(card: Element, listing: CSFListing): void {
   if (comparable && cbCents > csfCents) return;
 
   const href = getCsboardLink(marketHashName, phase);
-  // Show CSBOARD price in CSFloat's page currency (matches the Buff line + the
-  // price the user sees on the page) rather than the extension currency setting.
-  const priceDisplay = formatCsfPrice(cbCents).display;
+  // This is a CSBOARD quote, so its display follows the extension setting even
+  // when the host CSFloat page uses another currency. Conversion is strict: no
+  // rate means no panel, never a mislabeled USD fallback.
+  const formattedPrice = formatCsboardPriceInExtensionCurrency(cbCents);
+  if (!formattedPrice) return;
 
   let deltaHtml = '';
   if (comparable) {
@@ -645,11 +905,14 @@ function injectCsboardPanel(card: Element, listing: CSFListing): void {
   panel.className = 'csboard-panel';
   panel.href = href;
   panel.target = '_blank';
-  panel.rel = 'noopener';
-  panel.title = `View ${marketHashName} on CSBOARD`;
+  panel.rel = 'noopener noreferrer';
+  panel.title = `CSBOARD min ask via csgoskins.gg (${formattedPrice.currency})`;
   panel.innerHTML = `
     <img class="csboard-panel-logo" src="${CSBOARD_ICON}" />
-    <span class="csboard-panel-price">${priceDisplay}</span>
+    <span class="csboard-panel-quote">
+      <span class="csboard-panel-source">CSBOARD min ask · csgoskins.gg · ${formattedPrice.currency}</span>
+      <span class="csboard-panel-price">${formattedPrice.display}</span>
+    </span>
     ${deltaHtml}
     <span class="csboard-panel-cta">View on CSBOARD →</span>
   `;
@@ -714,7 +977,7 @@ function adjustSellDialog(dialog: Element): void {
   buffLine.className = 'csboard-buff-a';
   buffLine.href = buffLink;
   buffLine.target = '_blank';
-  buffLine.rel = 'noopener';
+  buffLine.rel = 'noopener noreferrer';
   buffLine.style.cssText = 'justify-content:center;width:100%;margin:8px 0;';
   buffLine.innerHTML = `
     <img src="${BUFF_ICON}" style="height:15px;margin-right:5px;border-radius:2px;" />
@@ -809,6 +1072,7 @@ function processCard(card: Element): void {
       if (card.querySelector('.csboard-buff-a')) return;
       const listing = getItemData(card);
       if (listing) {
+        injectListingMetadata(card, listing);
         injectPriceOverlay(card, listing);
         injectCsboardPanel(card, listing);
       } else if (retries++ < 6) {
@@ -818,6 +1082,7 @@ function processCard(card: Element): void {
     setTimeout(retry, 500);
     return;
   }
+  injectListingMetadata(card, listing);
   injectPriceOverlay(card, listing);
   injectCsboardPanel(card, listing);
 }
@@ -957,6 +1222,17 @@ function injectStyles(): void {
       border-radius: 3px;
       flex-shrink: 0;
     }
+    .csboard-panel-quote {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .csboard-panel-source {
+      color: #8b949e;
+      font-size: 10px;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
     .csboard-panel-price {
       color: #e6edf3;
       font-weight: 600;
@@ -985,6 +1261,41 @@ function injectStyles(): void {
       margin-left: 8px;
       vertical-align: middle;
       white-space: nowrap;
+    }
+    .csboard-listing-age {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      margin: 2px 0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(125, 185, 232, 0.10);
+      color: var(--subtext-color, #c1ceff);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .csboard-sold-status {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      margin: 4px 0;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(239, 68, 68, 0.14);
+      color: #ff8f8f;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .csboard-sold-status-button {
+      pointer-events: none;
+    }
+    .csboard-sold-status-button span.mdc-button__label {
+      color: #ff8f8f;
+      font-weight: 700;
     }
 
     /* --- Auto Sell Pricing panel (injected into app-sell-home .actions) --- */
@@ -1271,7 +1582,11 @@ document.addEventListener('csboard_api', ((e: CustomEvent) => {
 // Phase 2: UI injection after DOM is ready
 async function initUI() {
   await priceEngine.init();
+  await loadCsboardPanelSettings();
   await loadCsboardPrices();
+  // API interception starts at document_start and may already have rendered the
+  // detail price row while the toggle was intentionally fail-closed.
+  repaintCsboardPanel();
   injectStyles();
   startObserver();
 
@@ -1337,16 +1652,28 @@ function syncDetailCard(): void {
   if (!card) return;
   const listing = getItemData(card);
   if (!listing) return;
-  const key = `${listing.item.market_hash_name}|${listing.item.phase ?? ''}`;
+  const key = [
+    listing.id,
+    listing.item.asset_id ?? '',
+    listing.item.market_hash_name,
+    listing.item.phase ?? '',
+    Number.isFinite(listing.item.float_value) ? listing.item.float_value : '',
+    listing.state ?? '',
+    listing.created_at ?? '',
+    listing.sold_at ?? '',
+  ].join('|');
   // Same item already rendered → leave it (no flicker).
-  if (card.getAttribute('data-csboard-key') === key && card.querySelector('.csboard-buff-a')) {
+  if (card.getAttribute('data-csboard-key') === key &&
+      card.querySelector('.csboard-csfloat-lookup')) {
     return;
   }
   // New item (or first render) → swap overlays for this item.
+  resetListingMetadata(card);
   card
-    .querySelectorAll('.csboard-buff-a, .csboard-panel, .csboard-sale-tag')
+    .querySelectorAll('.csboard-buff-a, .csboard-panel, .csboard-sale-tag, .csboard-csfloat-lookup')
     .forEach((el) => el.remove());
   card.setAttribute('data-csboard-key', key);
+  injectListingMetadata(card, listing);
   injectPriceOverlay(card, listing);
   injectCsboardPanel(card, listing);
 }

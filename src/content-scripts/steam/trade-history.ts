@@ -34,7 +34,6 @@ class TradeHistoryScript {
     logger.info('Initializing trade history page');
 
     await priceEngine.init();
-    this.saveAccessToken();
     this.setupObserver();
     this.processExistingTrades();
   }
@@ -43,17 +42,6 @@ class TradeHistoryScript {
     this.observer?.disconnect();
     this.observer = null;
     logger.debug('Trade history script destroyed');
-  }
-
-  // --- Save access token (needed by extension trade history page) ---
-
-  private saveAccessToken() {
-    const token = document.getElementById('application_config')
-      ?.getAttribute('data-loyalty_webapi_token')
-      ?.replace(/"/g, '');
-    if (token) {
-      chrome.storage.local.set({ csboard_steam_access_token: token });
-    }
   }
 
   // --- MutationObserver ---

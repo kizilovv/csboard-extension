@@ -12,6 +12,16 @@
 declare const __brand: unique symbol;
 type Brand<T, B extends string> = T & { readonly [__brand]: B };
 
+import type {
+  P2PEligibleAsset,
+  P2PListingCommitResult,
+  P2PListingReview,
+  PrepareP2PListingRequest,
+  PopupSettingsV2,
+  PricePreferenceSyncStatus,
+  PortfolioSyncStatus as PopupPortfolioSyncStatus,
+} from '../popup/contracts';
+
 export type SteamId64 = Brand<string, 'SteamId64'>;
 export type TradeOfferId = Brand<string, 'TradeOfferId'>;
 export type TradeBoardId = Brand<string, 'TradeBoardId'>;
@@ -20,7 +30,6 @@ export type ClassId = Brand<string, 'ClassId'>;
 export type InstanceId = Brand<string, 'InstanceId'>;
 export type AuthToken = Brand<string, 'AuthToken'>;
 export type MarketHashName = Brand<string, 'MarketHashName'>;
-export type AccessToken = Brand<string, 'AccessToken'>;
 
 // Brand constructors (runtime no-ops, compile-time safety)
 export const SteamId64 = (v: string) => v as SteamId64;
@@ -31,7 +40,6 @@ export const ClassId = (v: string) => v as ClassId;
 export const InstanceId = (v: string) => v as InstanceId;
 export const AuthToken = (v: string) => v as AuthToken;
 export const MarketHashName = (v: string) => v as MarketHashName;
-export const AccessToken = (v: string) => v as AccessToken;
 
 // --- Trade Board Status (finite state machine) ---
 
@@ -226,12 +234,36 @@ export interface SteamSessionResult {
 
 export interface UserProfile {
   readonly id: string;
-  readonly steamId: SteamId64;
+  readonly steamId: SteamId64 | null;
   readonly name: string;
-  readonly avatar: string;
+  readonly avatar: string | null;
   readonly isPremium: boolean;
   readonly balance: number;
   readonly frozenBalance: number;
+}
+
+/**
+ * Normalizes an untrusted remote avatar URL before it reaches an image element.
+ * User-info responses are server controlled, but keeping this boundary strict
+ * prevents insecure HTTP, `data:`, `javascript:`, credential-bearing, and malformed URLs from
+ * becoming extension-page requests if the upstream value is ever corrupted.
+ */
+export function normalizeAvatarUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const candidate = value.trim();
+  if (!candidate || candidate.length > 2_048 || /[\u0000-\u001f\u007f]/.test(candidate)) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed.href;
+  } catch {
+    return null;
+  }
 }
 
 export type AuthState =
@@ -260,30 +292,42 @@ export type ExtensionMessage =
   | { type: 'REFRESH_PRICES' }
   | { type: 'GET_PRICE_ENGINE_STATUS' }
   | { type: 'UPDATE_PRICE_SETTINGS'; data: { currency?: string; priceSource?: string } }
-  // Trade Hold (Steam access token management)
-  | { type: 'SET_ACCESS_TOKEN'; data: { accessToken: AccessToken } }
-  | { type: 'GET_ACCESS_TOKEN_STATUS' }
+  | { type: 'GET_EXTENSION_SETTINGS'; version: 2 }
+  | {
+      type: 'UPDATE_EXTENSION_SETTINGS';
+      version: 2;
+      data: {
+        patch: Partial<Omit<PopupSettingsV2, 'schemaVersion'>>;
+        syncFromCsboardNow?: boolean;
+      };
+    }
+  // Fixed Steam read-session operations. Credentials never cross message boundaries.
+  | { type: 'GET_STEAM_READ_SESSION_STATUS' }
   | { type: 'GET_TRADE_HOLD_ITEMS'; data: { steamId: SteamId64 } }
-  | { type: 'CLEAR_ACCESS_TOKEN' }
-  // Steam Trade Offer (CSFloat-style direct trade creation)
-  | { type: 'CREATE_STEAM_TRADE'; data: CreateSteamTradeData }
-  | { type: 'GET_STEAM_SESSION' }
+  | { type: 'CLEAR_STEAM_READ_SESSION' }
   // Steam Trade Offers (IEconService — cs2trader approach)
-  | { type: 'FETCH_STEAM_TRADE_OFFERS'; data: { accessToken: string; activesOnly?: number; sent?: number; received?: number } }
-  | { type: 'VALIDATE_STEAM_TOKEN'; data: { accessToken: string } }
-  // Steam access token auto-refresh (re-mint via cookies when bound IP changes)
-  | { type: 'REFRESH_STEAM_ACCESS_TOKEN' }
-  // Trade History (csboard page + sync to server)
-  | { type: 'FETCH_TRADE_HISTORY'; data: { accessToken: string; maxTrades: number; startAfterTime?: number; startAfterTradeId?: string } }
+  // `pageAccessToken`/`pageSteamId` come from the content script's own DOM
+  // (`#application_config`). The service worker cannot always mint one itself:
+  // its fetch to steamcommunity.com is cross-site from `chrome-extension://`,
+  // so blocked third-party cookies make it look logged out.
+  | { type: 'FETCH_STEAM_TRADE_OFFERS'; data?: { activesOnly?: number; sent?: number; received?: number; pageAccessToken?: string; pageSteamId?: string } }
+  // Trade History (local read; portfolio upload is a separate opt-in controller)
+  | { type: 'FETCH_TRADE_HISTORY'; data: { maxTrades: number; startAfterTime?: number; startAfterTradeId?: string } }
   | { type: 'OPEN_TRADE_HISTORY' }
-  | { type: 'SYNC_TRADE_HISTORY'; data: { accessToken: string } }
   | { type: 'GET_TRADE_HISTORY_SYNC_STATE' }
   // Inventory enrichment (float, paint seed, stickers)
-  | { type: 'FETCH_INVENTORY_WITH_PROPERTIES'; data: { accessToken: string; steamId: string; contextId?: string } }
-  // P2P Market — trade annotation & status polling
-  | { type: 'P2P_CREATE_AND_ANNOTATE'; data: P2PTradeRequest }
-  | { type: 'P2P_REPORT_TRADE_STATUS'; data: { orderId: string; steamTradeOfferId: string; state: number } }
-  | { type: 'P2P_VERIFY_MOBILE_AUTH' };
+  | { type: 'FETCH_INVENTORY_WITH_PROPERTIES'; data: { steamId: string; contextId?: string; pageAccessToken?: string; pageSteamId?: string } }
+  // Portfolio gateway. These messages are accepted only by the extension's internal router.
+  | { type: 'PAIR_DEVICE'; version: 1; data: { code: string } }
+  | { type: 'UNPAIR_DEVICE'; version: 1 }
+  | { type: 'RUN_MANUAL_SYNC'; version: 1 }
+  | { type: 'GET_PORTFOLIO_SYNC_STATUS'; version: 1 }
+  // P2P publication. Popup-only, user-reviewed, listing actions only.
+  | { type: 'GET_P2P_ELIGIBLE_ASSETS'; version: 1 }
+  | { type: 'PREPARE_P2P_LISTING'; version: 1; data: PrepareP2PListingRequest }
+  | { type: 'CONFIRM_P2P_LISTING'; version: 1; data: { reviewId: string } }
+  | { type: 'CANCEL_P2P_LISTING_REVIEW'; version: 1; data: { reviewId: string } }
+  ;
 
 // Extract the type string for runtime checks
 export type MessageType = ExtensionMessage['type'];
@@ -301,23 +345,28 @@ export type MessageResponseMap = {
   REFRESH_PRICES: { success: boolean; count: number };
   GET_PRICE_ENGINE_STATUS: { loaded: boolean; count: number; lastFetched: number; currency: string; priceSource: string };
   UPDATE_PRICE_SETTINGS: { success: boolean };
-  SET_ACCESS_TOKEN: { success: true };
-  GET_ACCESS_TOKEN_STATUS: { isSet: boolean };
+  GET_EXTENSION_SETTINGS: { settings: PopupSettingsV2; sync: PricePreferenceSyncStatus };
+  UPDATE_EXTENSION_SETTINGS: {
+    success: true;
+    settings: PopupSettingsV2;
+    sync?: PricePreferenceSyncStatus;
+  };
+  GET_STEAM_READ_SESSION_STATUS: { ready: boolean };
   GET_TRADE_HOLD_ITEMS: TradeHoldStatus;
-  CLEAR_ACCESS_TOKEN: { success: true };
-  CREATE_STEAM_TRADE: SteamTradeResult;
-  GET_STEAM_SESSION: SteamSessionResult;
-  FETCH_STEAM_TRADE_OFFERS: { offers: { trade_offers_received: any[]; trade_offers_sent: any[] }; items: any[] };
-  VALIDATE_STEAM_TOKEN: { valid: boolean };
-  P2P_CREATE_AND_ANNOTATE: P2PAnnotateResult;
-  P2P_REPORT_TRADE_STATUS: { success: boolean };
-  P2P_VERIFY_MOBILE_AUTH: { success: boolean; hasMobileAuth?: boolean; myEscrowSeconds?: number; error?: string };
-  REFRESH_STEAM_ACCESS_TOKEN: { accessToken: string };
+  CLEAR_STEAM_READ_SESSION: { success: true };
+  FETCH_STEAM_TRADE_OFFERS: { offers: { trade_offers_received: unknown[]; trade_offers_sent: unknown[] }; items: unknown[] };
   FETCH_TRADE_HISTORY: { trades: unknown[]; totalTrades: number; hasMore: boolean; lastTradeId?: string; lastTradeTime?: number };
   OPEN_TRADE_HISTORY: { ok: true };
-  SYNC_TRADE_HISTORY: { synced: number; skipped: number; totalTrades: number };
   GET_TRADE_HISTORY_SYNC_STATE: { cursor: unknown; lastSync: number | null };
   FETCH_INVENTORY_WITH_PROPERTIES: { items: unknown[]; totalCount: number };
+  PAIR_DEVICE: { status: PopupPortfolioSyncStatus };
+  UNPAIR_DEVICE: { status: PopupPortfolioSyncStatus };
+  RUN_MANUAL_SYNC: { status: PopupPortfolioSyncStatus };
+  GET_PORTFOLIO_SYNC_STATUS: { status: PopupPortfolioSyncStatus };
+  GET_P2P_ELIGIBLE_ASSETS: { assets: readonly P2PEligibleAsset[] };
+  PREPARE_P2P_LISTING: { review: P2PListingReview };
+  CONFIRM_P2P_LISTING: P2PListingCommitResult;
+  CANCEL_P2P_LISTING_REVIEW: { success: true };
 };
 
 // Type-safe response extraction
@@ -356,9 +405,6 @@ export const STORAGE_KEYS = {
   PENDING_VERIFICATIONS: 'csboard_pending_verifications',
   LAST_SEEN_BOARD: 'csboard_last_seen_board',
   STORAGE_VERSION: 'csboard_storage_version',
-  // Trade Hold Token (encrypted)
-  ENCRYPTED_ACCESS_TOKEN: 'csboard_encrypted_access_token',
-  ACCESS_TOKEN_IV: 'csboard_access_token_iv',
   // P2P active trades — polled by alarm for status changes
   P2P_ACTIVE_TRADES: 'csboard_p2p_active_trades',
 } as const;
@@ -389,9 +435,24 @@ export interface StorageSchema {
   [STORAGE_KEYS.PENDING_VERIFICATIONS]: PendingVerification[];
   [STORAGE_KEYS.LAST_SEEN_BOARD]: string; // ISO timestamp
   [STORAGE_KEYS.STORAGE_VERSION]: number;
-  [STORAGE_KEYS.ENCRYPTED_ACCESS_TOKEN]: string; // base64 ciphertext
-  [STORAGE_KEYS.ACCESS_TOKEN_IV]: string; // base64 IV
   [STORAGE_KEYS.P2P_ACTIVE_TRADES]: P2PActiveTrade[];
+}
+
+export interface PortfolioSourceSettings {
+  inventory: boolean;
+  tradeOffers: boolean;
+  tradeHistory: boolean;
+  marketHistory: boolean;
+}
+
+export interface PortfolioSyncStatus {
+  paired: boolean;
+  deviceId?: string;
+  running: boolean;
+  lastSuccessAt?: number;
+  lastErrorCode?: string;
+  queuedChunks: number;
+  sources: PortfolioSourceSettings;
 }
 
 export interface ExtensionSettings {
@@ -402,6 +463,15 @@ export interface ExtensionSettings {
   currency: string;
   showBuffBuyOrder: boolean;
   checkBoardsIntervalMinutes: number;
+  /** One-way CSBOARD -> extension currency/source sync. Existing behavior stays on. */
+  followCsboardSettings: boolean;
+  /** Show CSBOARD price comparison UI on csfloat.com. */
+  showCsboardPricesOnCsfloat: boolean;
+  /** Opt-in BetterBuff-style read-only enhancements on buff.163.com. */
+  showBetterBuffOnBuff: boolean;
+  /** Explicit opt-in master switch. Pairing alone never uploads. */
+  portfolioSyncEnabled: boolean;
+  portfolioSources: PortfolioSourceSettings;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -412,6 +482,16 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   currency: 'USD',
   showBuffBuyOrder: true,
   checkBoardsIntervalMinutes: 1,
+  followCsboardSettings: true,
+  showCsboardPricesOnCsfloat: true,
+  showBetterBuffOnBuff: false,
+  portfolioSyncEnabled: false,
+  portfolioSources: {
+    inventory: false,
+    tradeOffers: false,
+    tradeHistory: false,
+    marketHistory: false,
+  },
 };
 
 export interface PendingVerification extends TradeOfferEvent {

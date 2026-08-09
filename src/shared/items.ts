@@ -7,6 +7,13 @@
 import { getDopplerInfo as getDopplerInfoByIcon } from './dopplerPhases';
 import { SITE_BASE } from './config';
 import { createLogger } from './logger';
+export { buildCsfloatSearchUrl } from './csfloat-lookup';
+export type {
+  CsfloatLookupItem,
+  CsfloatLookupOptions,
+  CsfloatSteamTag,
+  CsfloatWear,
+} from './csfloat-lookup';
 
 const logger = createLogger('items');
 
@@ -99,18 +106,34 @@ export const addPriceIndicator = (
  * Extract exterior short name from item tags.
  * Returns: FN, MW, FT, WW, BS or null
  */
-export const getExteriorShort = (tags: any[] | undefined): string | null => {
-  if (!tags) return null;
-  const exteriorTag = tags.find((t: any) => t.category === 'Exterior');
-  if (!exteriorTag) return null;
-  const map: Record<string, string> = {
-    'Factory New': 'FN',
-    'Minimal Wear': 'MW',
-    'Field-Tested': 'FT',
-    'Well-Worn': 'WW',
-    'Battle-Scarred': 'BS',
-  };
-  return map[exteriorTag.localized_tag_name || exteriorTag.name] || null;
+const EXTERIOR_SHORT: Record<string, string> = {
+  'Factory New': 'FN',
+  'Minimal Wear': 'MW',
+  'Field-Tested': 'FT',
+  'Well-Worn': 'WW',
+  'Battle-Scarred': 'BS',
+};
+
+/**
+ * Steam tags are the precise source, but they are not always present: the
+ * trade-offer read returns a normalized item DTO with no tag list, and the
+ * badges silently disappeared when that path replaced the raw description.
+ * The wear is also spelled out in the market hash name, so fall back to it
+ * rather than dropping the badge.
+ */
+export const getExteriorShort = (
+  tags: any[] | undefined,
+  marketHashName?: string,
+): string | null => {
+  const exteriorTag = tags?.find((t: any) => t.category === 'Exterior');
+  const tagged = exteriorTag
+    ? EXTERIOR_SHORT[exteriorTag.localized_tag_name || exteriorTag.name]
+    : undefined;
+  if (tagged) return tagged;
+
+  const named = /\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)\s*$/
+    .exec(marketHashName ?? '')?.[1];
+  return (named ? EXTERIOR_SHORT[named] : null) ?? null;
 };
 
 /**
@@ -154,13 +177,14 @@ export const addSSTandExtIndicators = (
     isStatrack?: boolean;
     isSouvenir?: boolean;
     tags?: any[];
+    marketHashName?: string;
     stickerTotal?: number;
   },
 ): void => {
   if (!itemElement) return;
   if (itemElement.querySelector('.exteriorSTInfo')) return;
 
-  const exterior = getExteriorShort(item.tags);
+  const exterior = getExteriorShort(item.tags, item.marketHashName);
   const st = item.isStatrack ? 'ST' : '';
   const sv = item.isSouvenir ? 'S' : '';
 
@@ -230,22 +254,6 @@ export const getBuffLink = (marketHashName: string, _dopplerPhase?: string): str
   const buffId = (buffIds as Record<string, number>)[marketHashName];
   if (buffId) return `https://buff.163.com/goods/${buffId}`;
   return `https://buff.163.com/market/csgo#tab=selling&page_num=1&search=${encodeURIComponent(marketHashName)}`;
-};
-
-export const getCsFloatLink = (marketHashName: string, opts?: { defIndex?: number; paintIndex?: number; dopplerPhase?: string }): string => {
-  // market_hash_name is the primary key — it carries the wear (e.g.
-  // "(Minimal Wear)") + StatTrak™/Souvenir, so CSFloat lands on the exact wear.
-  // def_index/paint_index alone collapse to ALL wears of the skin, so they're
-  // added only as extra precision params, never instead of the name.
-  let mhn = marketHashName;
-  if (opts?.dopplerPhase) {
-    mhn += ` [${opts.dopplerPhase}]`;
-  }
-  let url = `https://csfloat.com/search?market_hash_name=${encodeURIComponent(mhn)}`;
-  if (opts?.defIndex && opts?.paintIndex) {
-    url += `&def_index=${opts.defIndex}&paint_index=${opts.paintIndex}`;
-  }
-  return url;
 };
 
 export const getCsboardLink = (marketHashName: string, dopplerPhase?: string): string => {

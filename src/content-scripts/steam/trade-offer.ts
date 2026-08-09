@@ -17,13 +17,14 @@
 import { priceEngine } from '../../shared/price-engine';
 import { createLogger } from '../../shared/logger';
 import { injectScript } from '../../shared/inject';
+import { readSteamPageCredential } from '../../shared/steam-page-credential';
 import {
   getItemByIDs, getIDsFromElement,
   getAssetIDOfElement, getItemByAssetID,
   addFloatIndicator, addSSTandExtIndicators, addDopplerPhase,
   addPatternIndicator,
   resizeTradeProtectionIcon, makeItemColorful, addTradeHoldBadge,
-  parseTradability, getBuffLink, getCsFloatLink, getCsboardLink,
+  parseTradability, getBuffLink, buildCsfloatSearchUrl, getCsboardLink,
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
@@ -38,6 +39,23 @@ const combinedInventories: any[] = [];
 let userSteamID: string = '';
 let partnerSteamID: string = '';
 let offerID: string = '';
+
+const buildCsfloatUrlForTradeItem = (item: any | null | undefined, fallbackName: string): string =>
+  buildCsfloatSearchUrl({
+    assetId: item?.assetid,
+    marketHashName: item?.market_hash_name || fallbackName,
+    defIndex: item?.defIndex,
+    paintIndex: item?.paintIndex,
+    paintSeed: item?.floatInfo?.paintseed ?? item?.paintSeed,
+    floatValue: item?.floatInfo?.floatvalue ?? item?.floatValue,
+    dopplerPhase: item?.dopplerPhase,
+    isStatTrak: item?.isStatTrak === true || item?.isStatrack === true,
+    isSouvenir: item?.isSouvenir === true,
+    isKnife: item?.isKnife === true,
+    isGlove: item?.isGlove === true,
+    itemType: typeof item?.type === 'string' ? item.type : item?.type?.key,
+    tags: item?.tags,
+  });
 
 // ============================================================
 // cs2trader: getSteamID / getTradePartnerSteamID / getOfferID
@@ -285,10 +303,17 @@ const buildInventoryStructure = (inventory: any[]): any[] => {
         if (!prop) continue;
         if ((prop.propertyid === 1 || prop.def_index === 1) && (prop.int_value || prop.value))
           floatInfo.paintseed = parseInt(prop.int_value || prop.value);
-        if ((prop.propertyid === 2 || prop.def_index === 2) && (prop.float_value || prop.value))
-          floatInfo.floatvalue = parseFloat(prop.float_value || prop.value);
+        const rawFloat = prop.float_value ?? prop.value;
+        if (
+          (prop.propertyid === 2 || prop.def_index === 2) &&
+          rawFloat !== null &&
+          rawFloat !== undefined &&
+          rawFloat !== ''
+        ) {
+          floatInfo.floatvalue = parseFloat(rawFloat);
+        }
       }
-      if (!floatInfo.floatvalue && !floatInfo.paintseed) floatInfo = null;
+      if (floatInfo.floatvalue === undefined && floatInfo.paintseed === undefined) floatInfo = null;
     }
 
     // cs2trader: sticker price from description.name === 'sticker_info'
@@ -409,9 +434,11 @@ const fetchAllDescriptions = (): void => {
         }
       }
       // UserYou + UserThem
-      ['UserYou', 'UserThem'].forEach(function(u) {
+      [
+        typeof UserYou !== 'undefined' ? UserYou : null,
+        typeof UserThem !== 'undefined' ? UserThem : null
+      ].forEach(function(user) {
         try {
-          var user = eval(u);
           if (!user || !user.rgAppInfo || !user.rgAppInfo['730']) return;
           var inv = user.getInventory(730, 2);
           if (!inv) return;
@@ -636,6 +663,7 @@ const addPerItemInfo = (_inventoryOwnerID?: string): void => {
       isStatrack: item.isStatrack,
       isSouvenir: item.isSouvenir,
       tags: item.tags,
+      marketHashName: item.marketHashName ?? item.name,
       stickerTotal: item.stickerTotal,
     });
 
@@ -1335,16 +1363,16 @@ const setupContextMenu = (): void => {
     const itemEl = target.closest('[data-market-hash-name]') || target.closest('.item.app730.context2');
     if (!itemEl) return;
 
-    let name = itemEl.getAttribute('data-market-hash-name');
-    if (!name) {
-      const assetID = getAssetIDOfElement(itemEl as HTMLElement);
-      const item = getItemByAssetID(combinedInventories, assetID);
-      if (item) name = item.market_hash_name;
-    }
+    const IDs = getIDsFromElement(itemEl as HTMLElement, 'offer');
+    const assetID = getAssetIDOfElement(itemEl as HTMLElement);
+    const exactItem =
+      (IDs ? getItemByIDs(combinedInventories, IDs.appID, IDs.contextID, IDs.assetID) : null) ||
+      getItemByAssetID(combinedInventories, assetID);
+    const name = exactItem?.market_hash_name || itemEl.getAttribute('data-market-hash-name');
     if (!name) return;
 
     e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, name);
+    showContextMenu(e.clientX, e.clientY, name, exactItem);
   });
 
   document.addEventListener('click', () => {
@@ -1352,7 +1380,7 @@ const setupContextMenu = (): void => {
   });
 };
 
-const showContextMenu = (x: number, y: number, marketName: string): void => {
+const showContextMenu = (x: number, y: number, marketName: string, item?: any): void => {
   document.getElementById('csboard-context-menu')?.remove();
 
   const encodedName = encodeURIComponent(marketName);
@@ -1373,13 +1401,13 @@ const showContextMenu = (x: number, y: number, marketName: string): void => {
     ${price ? `<div class="csboard-ctx-price">${sign}${price.raw.toFixed(2)}</div>` : ''}
     <div class="csboard-ctx-name">${sanitize(marketName)}</div>
     <div class="csboard-ctx-sep"></div>
-    <a class="csboard-ctx-item" href="https://buff.163.com/market/csgo#tab=selling&page_num=1&search=${encodedName}" target="_blank">
+    <a class="csboard-ctx-item" href="https://buff.163.com/market/csgo#tab=selling&page_num=1&search=${encodedName}" target="_blank" rel="noopener noreferrer">
       <span class="csboard-ctx-icon">B</span> Lookup on BUFF
     </a>
-    <a class="csboard-ctx-item" href="https://csfloat.com/search?market_hash_name=${encodedName}" target="_blank">
+    <a class="csboard-ctx-item" href="${buildCsfloatUrlForTradeItem(item, marketName)}" target="_blank" rel="noopener noreferrer">
       <span class="csboard-ctx-icon">F</span> Lookup on CSFloat
     </a>
-    <a class="csboard-ctx-item" href="${getCsboardLink(marketName)}" target="_blank">
+    <a class="csboard-ctx-item" href="${getCsboardLink(marketName)}" target="_blank" rel="noopener noreferrer">
       <span class="csboard-ctx-icon">C</span> View on CSBOARD
     </a>
   `;
@@ -1412,11 +1440,29 @@ const mergeFloatData = (apiItems: any[]): number => {
   for (const item of combinedInventories) {
     const apiItem = assetMap[item.assetid];
     if (!apiItem) continue;
-    if ((apiItem.floatValue || apiItem.floatvalue) && !item.floatInfo?.floatvalue) {
-      item.floatInfo = {
-        floatvalue: apiItem.floatValue || apiItem.floatvalue,
-        paintseed: apiItem.paintSeed || apiItem.paintseed,
-      };
+    const rawFloat = apiItem.floatValue ?? apiItem.floatvalue;
+    const parsedFloat = rawFloat === null || rawFloat === undefined || rawFloat === ''
+      ? Number.NaN
+      : Number(rawFloat);
+    const rawPaintSeed = apiItem.paintSeed ?? apiItem.paintseed;
+    const parsedPaintSeed = rawPaintSeed === null || rawPaintSeed === undefined || rawPaintSeed === ''
+      ? Number.NaN
+      : Number(rawPaintSeed);
+    const hasNewFloat =
+      Number.isFinite(parsedFloat) &&
+      parsedFloat >= 0 &&
+      parsedFloat <= 1 &&
+      !Number.isFinite(item.floatInfo?.floatvalue);
+    const hasNewPaintSeed =
+      Number.isFinite(parsedPaintSeed) &&
+      !Number.isFinite(item.floatInfo?.paintseed);
+
+    if (hasNewFloat || hasNewPaintSeed) {
+      item.floatInfo ??= {};
+      if (hasNewFloat) item.floatInfo.floatvalue = parsedFloat;
+      if (hasNewPaintSeed) item.floatInfo.paintseed = parsedPaintSeed;
+      if (Number.isInteger(apiItem.defIndex)) item.defIndex = apiItem.defIndex;
+      if (Number.isInteger(apiItem.paintIndex)) item.paintIndex = apiItem.paintIndex;
       // Recalculate pattern info now that we have paintseed
       if (!item.patternInfo && item.floatInfo.paintseed) {
         item.patternInfo = getPattern(item.market_hash_name, item.floatInfo.paintseed);
@@ -1436,18 +1482,17 @@ const enrichWithAssetProperties = async (): Promise<void> => {
   }
   if (combinedInventories.length === 0) return;
 
-  // Get access token for OUR inventory
-  const tokenScript = "document.querySelector('body').setAttribute('steamToken', document.getElementById('application_config')?.getAttribute('data-loyalty_webapi_token')?.replace(/\"/g,'') || '');";
-  const accessToken = injectScript(tokenScript, true, 'getToken', 'steamToken');
-
   let enriched = 0;
 
-  // 1. Enrich OUR items via GetInventoryItemsWithDescriptions (needs access token)
-  if (accessToken && userSteamID) {
+  // 1. Enrich OUR items through the background's private fixed read provider.
+  if (userSteamID) {
     try {
       const result = await new Promise<any>((resolve, reject) => {
         chrome.runtime.sendMessage(
-          { type: 'FETCH_INVENTORY_WITH_PROPERTIES', data: { accessToken, steamId: userSteamID } },
+          {
+            type: 'FETCH_INVENTORY_WITH_PROPERTIES',
+            data: { steamId: userSteamID, ...(readSteamPageCredential() ?? {}) },
+          },
           (response) => {
             if (chrome.runtime.lastError) { reject(chrome.runtime.lastError.message); return; }
             if (response?.error) { reject(response.error); return; }
@@ -1490,7 +1535,14 @@ const enrichWithAssetProperties = async (): Promise<void> => {
               for (const p of props as any[]) {
                 if (!p) continue;
                 if (p.propertyid === 1 && p.int_value) paintSeed = parseInt(p.int_value);
-                if (p.propertyid === 2 && p.float_value) floatValue = parseFloat(p.float_value);
+                if (
+                  p.propertyid === 2 &&
+                  p.float_value !== null &&
+                  p.float_value !== undefined &&
+                  p.float_value !== ''
+                ) {
+                  floatValue = parseFloat(p.float_value);
+                }
               }
               propItems.push({ assetid: assetId, floatValue, paintSeed });
             }
@@ -1683,13 +1735,13 @@ async function init() {
         a.className = 'popup_menu_item csboard-popup-link';
         a.href = href;
         a.target = '_blank';
+        a.rel = 'noopener noreferrer';
         staticActions.appendChild(a);
       };
 
-      const clickedItem = combinedInventories.find((i: any) => i.market_hash_name === itemName || i.name === itemName);
-      const cDPhase = clickedItem?.dopplerPhase;
+      const cDPhase = item?.dopplerPhase;
       addLink('Lookup on BUFF', getBuffLink(itemName, cDPhase));
-      addLink('Lookup on CSFloat', getCsFloatLink(itemName, { defIndex: clickedItem?.defIndex, paintIndex: clickedItem?.paintIndex, dopplerPhase: cDPhase }));
+      addLink('Lookup on CSFloat', buildCsfloatUrlForTradeItem(item, itemName));
     }, 100);
   });
 

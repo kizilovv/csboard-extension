@@ -19,7 +19,7 @@
 
 import { type Result, Ok, Fail } from './result';
 import { createLogger } from './logger';
-import type { CSBoardError } from './types';
+import type { CSBoardError, ErrorCode } from './types';
 import type { WalletFeeInfo } from './steam-fees';
 
 const logger = createLogger('market-orders');
@@ -35,6 +35,23 @@ const RATE_LIMIT_COOLDOWN_MS = 90 * 1000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 const NAMEID_CACHE_KEY = 'csboard_market_nameids';
+
+/** Stable status mapping so batch orchestration can stop on auth/429. */
+export function classifyMarketReadHttpStatus(status: number): ErrorCode | null {
+  if (status === 401 || status === 403) return 'AUTH_EXPIRED';
+  if (status === 429) return 'RATE_LIMITED';
+  if (status >= 500) return 'NETWORK_ERROR';
+  if (status >= 400) return 'API_ERROR';
+  return null;
+}
+
+function isSteamLoginRedirect(resp: Response): boolean {
+  return /steamcommunity\.com\/(?:login|openid)(?:\/|\?|$)/i.test(resp.url);
+}
+
+function looksLikeSteamLoginHtml(raw: string): boolean {
+  return /(?:id=["']login_form["']|g_steamID\s*=\s*(?:false|["']{2})|Sign In[^<]{0,30}Steam)/i.test(raw);
+}
 
 // --- Types ---
 
@@ -143,7 +160,7 @@ async function writeNameId(marketHashName: string, id: string): Promise<void> {
  * the user is looking at. Every avoided HTML fetch is 429 budget saved.
  */
 export function primeItemNameId(marketHashName: string, id: string): void {
-  if (!marketHashName || !/^\d+$/.test(id)) return;
+  if (!marketHashName || marketHashName.length > 512 || !/^\d{1,20}$/.test(id)) return;
   nameIdMemo.set(marketHashName, id);
   void writeNameId(marketHashName, id);
 }
@@ -156,12 +173,15 @@ export function primeItemNameId(marketHashName: string, id: string): void {
 export async function resolveItemNameId(
   marketHashName: string,
 ): Promise<Result<string, CSBoardError>> {
+  if (!marketHashName || marketHashName.length > 512 || marketHashName === '__proto__') {
+    return Fail('Invalid Steam market name', 'VALIDATION_ERROR', false);
+  }
   const memo = nameIdMemo.get(marketHashName);
   if (memo) return Ok(memo);
 
   const cache = await readNameIdCache();
   const cached = cache[marketHashName];
-  if (cached) {
+  if (typeof cached === 'string' && /^\d{1,20}$/.test(cached)) {
     nameIdMemo.set(marketHashName, cached);
     return Ok(cached);
   }
@@ -175,18 +195,29 @@ export async function resolveItemNameId(
   try {
     const resp = await gated(() => fetchWithTimeout(url, 'text/html'));
 
-    if (resp.status === 429) {
+    const httpError = classifyMarketReadHttpStatus(resp.status);
+    if (httpError === 'RATE_LIMITED') {
       enterCooldown();
       return Fail('Steam rate limit (429) on listing page', 'RATE_LIMITED', true);
     }
+    if (httpError === 'AUTH_EXPIRED' || isSteamLoginRedirect(resp)) {
+      return Fail('Steam session expired while loading market prices', 'AUTH_EXPIRED', false);
+    }
     if (!resp.ok) {
-      return Fail(`Listing page HTTP ${resp.status}`, 'NETWORK_ERROR', resp.status >= 500);
+      return Fail(
+        `Listing page HTTP ${resp.status}`,
+        httpError ?? 'NETWORK_ERROR',
+        httpError === 'NETWORK_ERROR',
+      );
     }
 
     const html = await resp.text();
+    if (looksLikeSteamLoginHtml(html)) {
+      return Fail('Steam session expired while loading market prices', 'AUTH_EXPIRED', false);
+    }
     const match = /Market_LoadOrderSpread\(\s*(\d+)\s*\)/.exec(html);
     const id = match?.[1];
-    if (!id) {
+    if (!id || !/^\d{1,20}$/.test(id)) {
       // No order spread on the page = item has never been marketable here.
       return Fail('No order book for this item', 'STEAM_DOM_ERROR', false);
     }
@@ -206,8 +237,9 @@ const bookCache = new Map<string, OrderBook>();
 
 function parseMinorUnits(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null;
-  const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
+  if (typeof raw === 'string' && !/^\d+$/.test(raw)) return null;
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 /** Read a cached order book without touching the network. */
@@ -252,20 +284,38 @@ export async function getOrderBook(
   try {
     const resp = await gated(() => fetchWithTimeout(url, 'application/json'));
 
-    if (resp.status === 429) {
+    const httpError = classifyMarketReadHttpStatus(resp.status);
+    if (httpError === 'RATE_LIMITED') {
       enterCooldown();
       return Fail('Steam rate limit (429) on order book', 'RATE_LIMITED', true);
     }
+    if (httpError === 'AUTH_EXPIRED' || isSteamLoginRedirect(resp)) {
+      return Fail('Steam session expired while loading the order book', 'AUTH_EXPIRED', false);
+    }
     if (!resp.ok) {
-      return Fail(`Order book HTTP ${resp.status}`, 'NETWORK_ERROR', resp.status >= 500);
+      return Fail(
+        `Order book HTTP ${resp.status}`,
+        httpError ?? 'NETWORK_ERROR',
+        httpError === 'NETWORK_ERROR',
+      );
     }
 
-    const body = (await resp.json()) as {
+    const raw = await resp.text();
+    if (looksLikeSteamLoginHtml(raw)) {
+      return Fail('Steam session expired while loading the order book', 'AUTH_EXPIRED', false);
+    }
+
+    let body: {
       success?: number;
       highest_buy_order?: string | null;
       lowest_sell_order?: string | null;
       buy_order_graph?: Array<[number, number, string]>;
     };
+    try {
+      body = JSON.parse(raw) as typeof body;
+    } catch {
+      return Fail('Steam returned an invalid order book response', 'API_ERROR', true);
+    }
 
     if (body.success !== 1) {
       return Fail('Steam returned an empty order book', 'API_ERROR', true);

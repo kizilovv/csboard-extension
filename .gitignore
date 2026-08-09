@@ -1,6 +1,10 @@
 node_modules/
 build/
 dist/
+artifacts/build-meta/
+artifacts/build-profile.json
+artifacts/releases/
+.git.broken/
 .swarm
 .swarm/
 *.log

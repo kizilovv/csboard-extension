@@ -19,7 +19,7 @@ import {
   getIDsFromElement, getItemByIDs, addPriceIndicator,
   addFloatIndicator, addSSTandExtIndicators, resizeTradeProtectionIcon,
   makeItemColorful, addTradeHoldBadge, parseTradability, addDopplerPhase,
-  addPatternIndicator, getBuffLink, getCsFloatLink, getCsboardLink,
+  addPatternIndicator, getBuffLink, buildCsfloatSearchUrl, getCsboardLink,
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
@@ -35,6 +35,23 @@ const logger = createLogger('inventory');
 let items: any[] = [];
 let inventoryTotal = 0;
 let inventoryOwnerID = '';
+
+const buildCsfloatUrlForInventoryItem = (item: any | null | undefined, fallbackName: string): string =>
+  buildCsfloatSearchUrl({
+    assetId: item?.assetid,
+    marketHashName: item?.market_hash_name || fallbackName,
+    defIndex: item?.defIndex,
+    paintIndex: item?.paintIndex,
+    paintSeed: item?.paintSeed,
+    floatValue: item?.floatValue,
+    dopplerPhase: item?.dopplerPhase,
+    isStatTrak: item?.isStatTrak === true || item?.isStatrack === true,
+    isSouvenir: item?.isSouvenir === true,
+    isKnife: item?.isKnife === true,
+    isGlove: item?.isGlove === true,
+    itemType: typeof item?.type === 'string' ? item.type : item?.type?.key,
+    tags: item?.tags,
+  });
 
 // ============================================================
 // cs2trader: getInventoryOwnerID — via injectScript
@@ -171,7 +188,14 @@ const buildInventory = (rawItems: any[]): { items: any[]; total: number } => {
       for (const prop of props as any[]) {
         if (!prop) continue;
         if (prop.propertyid === 1 && prop.int_value) paintSeed = parseInt(prop.int_value);
-        if (prop.propertyid === 2 && prop.float_value) floatValue = parseFloat(prop.float_value);
+        if (
+          prop.propertyid === 2 &&
+          prop.float_value !== null &&
+          prop.float_value !== undefined &&
+          prop.float_value !== ''
+        ) {
+          floatValue = parseFloat(prop.float_value);
+        }
         // propertyid 6 = protobuf hex certificate — decode for defindex, paintindex, stickers etc.
         if (prop.propertyid === 6 && prop.string_value) {
           try {
@@ -180,12 +204,16 @@ const buildInventory = (rawItems: any[]): { items: any[]; total: number } => {
             if (decoded.paintindex) paintIndex = decoded.paintindex;
             // Use decoded paintseed/paintwear as fallback if not from propertyid 1/2
             if (!paintSeed && decoded.paintseed) paintSeed = decoded.paintseed;
-            if (!floatValue && decoded.paintwear) floatValue = decoded.paintwear;
+            if (floatValue === null && decoded.paintwear !== undefined) {
+              floatValue = decoded.paintwear;
+            }
           } catch { /* invalid hex, skip */ }
         }
       }
     }
-    if (floatValue !== null && (isNaN(floatValue) || floatValue <= 0)) floatValue = null;
+    if (floatValue !== null && (!Number.isFinite(floatValue) || floatValue < 0 || floatValue > 1)) {
+      floatValue = null;
+    }
 
     // cs2trader EXACT: parse stickers from description.name === 'sticker_info'
     // Format: {name: 'sticker_info', value: '<html with sticker names>'}
@@ -433,18 +461,13 @@ const setupContextMenu = (): void => {
     const itemEl = target.closest('[data-market-hash-name]') || target.closest('.item.app730.context2');
     if (!itemEl) return;
 
-    let name = itemEl.getAttribute('data-market-hash-name');
+    const IDs = getIDsFromElement(itemEl as HTMLElement, 'inventory');
     let foundItem: any = null;
-    if (!name) {
-      const IDs = getIDsFromElement(itemEl as HTMLElement, 'inventory');
-      if (IDs) {
-        foundItem = getItemByIDs(items, IDs.appID, IDs.contextID, IDs.assetID);
-        if (!foundItem) foundItem = items.find((i: any) => i.assetid === IDs.assetID);
-        if (foundItem) name = foundItem.market_hash_name;
-      }
-    } else {
-      foundItem = items.find((i: any) => i.market_hash_name === name);
+    if (IDs) {
+      foundItem = getItemByIDs(items, IDs.appID, IDs.contextID, IDs.assetID);
+      if (!foundItem) foundItem = items.find((i: any) => i.assetid === IDs.assetID);
     }
+    const name = foundItem?.market_hash_name || itemEl.getAttribute('data-market-hash-name');
     if (!name) return;
 
     e.preventDefault();
@@ -470,13 +493,13 @@ const setupContextMenu = (): void => {
       ${price ? `<div class="csboard-ctx-price">${sign}${price.raw.toFixed(2)}</div>` : ''}
       <div class="csboard-ctx-name">${sanitize(name)}${dPhase ? ` <span style="color:#8bb9e0">${dPhase}</span>` : ''}</div>
       <div class="csboard-ctx-sep"></div>
-      <a class="csboard-ctx-item" href="${getBuffLink(name, dPhase)}" target="_blank">
+      <a class="csboard-ctx-item" href="${getBuffLink(name, dPhase)}" target="_blank" rel="noopener noreferrer">
         <span class="csboard-ctx-icon">B</span> Lookup on BUFF
       </a>
-      <a class="csboard-ctx-item" href="${getCsFloatLink(name, { defIndex: foundItem?.defIndex, paintIndex: foundItem?.paintIndex, dopplerPhase: dPhase })}" target="_blank">
+      <a class="csboard-ctx-item" href="${buildCsfloatUrlForInventoryItem(foundItem, name)}" target="_blank" rel="noopener noreferrer">
         <span class="csboard-ctx-icon">F</span> Lookup on CSFloat
       </a>
-      <a class="csboard-ctx-item" href="${getCsboardLink(name, dPhase)}" target="_blank">
+      <a class="csboard-ctx-item" href="${getCsboardLink(name, dPhase)}" target="_blank" rel="noopener noreferrer">
         <span class="csboard-ctx-icon">C</span> View on CSBOARD
       </a>
     `;
@@ -585,12 +608,15 @@ const readAllContextItems = (): any[] => {
   // Read from BOTH context 2 and context 16
   const ctx2 = getItemInfoFromPage('730', '2') || [];
   const ctx16 = getItemInfoFromPage('730', '16') || [];
-  // Dedupe by assetid
+  // Steam Economy identity is app + context + asset. Numeric asset IDs may be
+  // reused across contexts, so an assetId-only Set would silently drop a held
+  // or unlocked sibling from totals and repaint flows.
   const seen = new Set<string>();
   const merged: any[] = [];
   for (const item of [...ctx2, ...ctx16]) {
-    if (!seen.has(item.assetid)) {
-      seen.add(item.assetid);
+    const identity = `${item.appid || '730'}:${item.contextid}:${item.assetid}`;
+    if (!seen.has(identity)) {
+      seen.add(identity);
       merged.push(item);
     }
   }
@@ -769,7 +795,30 @@ const setupObserver = (): void => {
 //
 // Each entry returned describes WHERE to insert the lookup block AND WHICH
 // item name to use, so we don't depend on now-removed selectors.
-type LookupAnchor = { row: Element; itemName: string };
+type LookupAnchor = { row: Element; itemName: string; assetId?: string };
+
+const getAssetIdFromInspectHref = (href: string): string | undefined => {
+  let normalizedHref = href;
+  try {
+    normalizedHref = decodeURIComponent(href);
+  } catch {
+    // A malformed third-party href is not a reason to break the generic link.
+  }
+  return normalizedHref.match(/A(\d+)D/i)?.[1];
+};
+
+const findInspectAssetIdNear = (element: Element): string | undefined => {
+  let scope: Element | null = element;
+  for (let depth = 0; scope && scope !== document.body && depth < 8; depth += 1) {
+    const inspectLink = scope.matches('a[href*="csgo_econ_action_preview"]')
+      ? scope as HTMLAnchorElement
+      : scope.querySelector<HTMLAnchorElement>('a[href*="csgo_econ_action_preview"]');
+    const assetId = inspectLink ? getAssetIdFromInspectHref(inspectLink.href) : undefined;
+    if (assetId) return assetId;
+    scope = scope.parentElement;
+  }
+  return undefined;
+};
 
 const findLookupAnchors = (): LookupAnchor[] => {
   const seen = new Set<Element>();
@@ -796,7 +845,8 @@ const findLookupAnchors = (): LookupAnchor[] => {
     if (!itemName) return;
 
     seen.add(row);
-    out.push({ row, itemName });
+    const assetId = findInspectAssetIdNear(row);
+    out.push(assetId ? { row, itemName, assetId } : { row, itemName });
   });
 
   // Fallback: the "Inspect in Game" button. Matches both new and old UIs.
@@ -819,7 +869,8 @@ const findLookupAnchors = (): LookupAnchor[] => {
       if (!itemName) return;
 
       seen.add(wrapper);
-      out.push({ row: wrapper, itemName });
+      const assetId = getAssetIdFromInspectHref(btn.href);
+      out.push(assetId ? { row: wrapper, itemName, assetId } : { row: wrapper, itemName });
     });
   }
 
@@ -833,11 +884,7 @@ const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
   // the wear/quality, which produced wear-less Buff/CSFloat/CSBOARD links.
   const linkName = (item?.market_hash_name as string) || itemName;
   const buffHref = getBuffLink(linkName, dPhase);
-  const csfloatHref = getCsFloatLink(linkName, {
-    defIndex: item?.defIndex,
-    paintIndex: item?.paintIndex,
-    dopplerPhase: dPhase,
-  });
+  const csfloatHref = buildCsfloatUrlForInventoryItem(item, linkName);
   const csboardHref = getCsboardLink(linkName, dPhase);
 
   const block = document.createElement('div');
@@ -845,9 +892,9 @@ const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
   block.style.cssText =
     'margin: 8px 0; display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 12px; padding: 5px 6px; border: 1px solid rgb(56,64,77); background: rgb(43,48,57); border-radius: 3px;';
   block.innerHTML = `
-    <a href="${buffHref}" target="_blank" rel="noopener" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Buff</a>
-    <a href="${csfloatHref}" target="_blank" rel="noopener" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">CSFloat</a>
-    <a href="${csboardHref}" target="_blank" rel="noopener" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">CSBOARD</a>
+    <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Buff</a>
+    <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">CSFloat</a>
+    <a href="${csboardHref}" target="_blank" rel="noopener noreferrer" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">CSBOARD</a>
   `;
   return block;
 };
@@ -868,14 +915,23 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     // the first anchor whose item we actually resolved.
     let sellAnchor: { block: Element; item: any } | null = null;
 
-    anchors.forEach(({ row, itemName }) => {
+    anchors.forEach(({ row, itemName, assetId }) => {
       // Skip if we've already injected immediately after this row this pass.
       const next = row.nextElementSibling as Element | null;
       if (next?.classList.contains('csboard-lookup-inline')) return;
 
-      const item = items.find(
-        (i: any) => i.market_hash_name === itemName || i.name === itemName,
-      );
+      const exactItem = assetId
+        ? items.find((candidate: any) => candidate.assetid === assetId)
+        : undefined;
+      const nameMatches = assetId
+        ? []
+        : items.filter(
+          (candidate: any) =>
+            candidate.market_hash_name === itemName || candidate.name === itemName,
+        );
+      // If the panel does not expose an asset id, metadata is exact only when
+      // the name resolves to one item. Duplicate knives/gloves stay generic.
+      const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
       const block = buildLookupBlock(item, itemName);
       row.insertAdjacentElement('afterend', block);
 
@@ -1357,13 +1413,15 @@ async function init() {
           el.removeAttribute('data-processed');
           el.querySelectorAll('.priceIndicator, .floatIndicator, .exteriorSTInfo, .stickerPrice').forEach((tag) => tag.remove());
         });
-        // Rebuild inventory with new prices
-        const rawItems = getItemInfoFromPage('730', '2');
-        if (rawItems && rawItems.length > 0) {
+        // Rebuild from the same complete view used by initial/full loading.
+        // readAllContextItems merges context 2 + 16 by composite Steam asset
+        // identity, so
+        // a currency/source repaint can never silently discard held assets.
+        const rawItems = readAllContextItems();
+        if (rawItems.length > 0) {
           const result = buildInventory(rawItems);
           items = result.items;
           inventoryTotal = result.total;
-      
         }
         addPerItemInfo();
         updateValuationBanner();

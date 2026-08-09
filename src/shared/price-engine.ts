@@ -97,6 +97,19 @@ const DEFAULT_SETTINGS: PriceEngineSettings = {
   priceSource: 'buff163',
 };
 
+/** Narrows the shared settings blob to the two keys this engine owns. */
+function pickPriceSettings(raw: unknown): PriceEngineSettings {
+  const record = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  return {
+    currency: typeof record['currency'] === 'string'
+      ? record['currency']
+      : DEFAULT_SETTINGS.currency,
+    priceSource: typeof record['priceSource'] === 'string'
+      ? record['priceSource'] as PriceSourceKey
+      : DEFAULT_SETTINGS.priceSource,
+  };
+}
+
 export interface FormattedPrice {
   raw: number;        // price in user's currency (dollars, not cents)
   display: string;    // formatted: "$12.34" or "₽1,234.56"
@@ -149,7 +162,12 @@ class PriceEngine {
 
       this.prices = data[PRICES_STORAGE_KEY] || {};
       this.exchangeRates = data[RATES_STORAGE_KEY] || {};
-      this.settings = { ...DEFAULT_SETTINGS, ...(data[SETTINGS_KEY] || {}) };
+      // 🔴 Only the price keys. SETTINGS_KEY holds the whole extension settings
+      // object, and copying it wholesale made `this.settings` a stale snapshot
+      // of unrelated switches — which updateSettings() then wrote back over the
+      // user's newer choices. That is how enabling BetterBuff appeared to
+      // succeed and silently reverted.
+      this.settings = pickPriceSettings(data[SETTINGS_KEY]);
       this.loaded = true;
 
       logger.info('Price engine loaded', {
@@ -188,7 +206,15 @@ class PriceEngine {
   /** Update settings */
   async updateSettings(partial: Partial<PriceEngineSettings>): Promise<void> {
     this.settings = { ...this.settings, ...partial };
-    await chrome.storage.local.set({ [SETTINGS_KEY]: this.settings });
+    const stored = await chrome.storage.local.get(SETTINGS_KEY);
+    await chrome.storage.local.set({
+      [SETTINGS_KEY]: {
+        ...(stored[SETTINGS_KEY] || {}),
+        // Write back the two keys this engine owns, never a whole snapshot.
+        currency: this.settings.currency,
+        priceSource: this.settings.priceSource,
+      },
+    });
   }
 
   /**
