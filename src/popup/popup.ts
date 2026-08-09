@@ -35,6 +35,7 @@ import {
   buildP2PAssetOption,
   p2pAssetOptionsMatch,
 } from './p2p-view-model';
+import { pairingFailureNotice } from './pairing-error-notice';
 
 type NoticeKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -729,8 +730,8 @@ async function pairDevice(code: string): Promise<void> {
     portfolioStatus = normalizePortfolioStatus(response.status, portfolioStatus);
     element<HTMLInputElement>('#pairing-code-input').value = '';
     showNotice('Device paired with CSFolder. Portfolio uploads are still off until you enable them.', 'success');
-  } catch {
-    showNotice('Pairing failed. Generate a fresh code in CSFolder and try again.', 'error');
+  } catch (error) {
+    showNotice(pairingFailureNotice(error), 'error');
   } finally {
     portfolioBusy = false;
     renderPortfolio();
