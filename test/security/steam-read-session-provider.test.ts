@@ -89,3 +89,63 @@ test('Steam offer read omits the warning when the complete result is within the 
   assert.equal(result.offers.length, 1);
   assert.equal(result.warningCode, undefined);
 });
+
+test('Steam inventory read recovers the trade-hold end from the owner-only description', async () => {
+  // Verified against a live account: Steam leaves `tradable_after` empty on
+  // this read and ships the unlock instant as a BBCode token inside
+  // `owner_descriptions`, which it serves only to the signed-in owner.
+  const HOLD_ENDS_AT = 1_786_384_800;
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('https://steamcommunity.com/')) return tokenPage(url);
+    return new Response(JSON.stringify({
+      response: {
+        assets: [
+          { appid: 730, contextid: '2', assetid: '111', classid: '9', instanceid: '0', amount: '1' },
+          { appid: 730, contextid: '2', assetid: '222', classid: '8', instanceid: '0', amount: '1' },
+        ],
+        descriptions: [
+          {
+            classid: '9',
+            instanceid: '0',
+            market_hash_name: '★ Bayonet | Case Hardened (Battle-Scarred)',
+            tradable: 1,
+            marketable: 1,
+            owner_descriptions: [
+              { type: 'html', value: 'This item is listed on the Steam Community Market and cannot be consumed or modified while listed.' },
+              { type: 'html', value: `This item is trade-protected and cannot be consumed, modified, or transferred until [date]${HOLD_ENDS_AT}[/date]` },
+            ],
+          },
+          {
+            classid: '8',
+            instanceid: '0',
+            market_hash_name: 'AK-47 | Redline (Field-Tested)',
+            tradable: 1,
+            marketable: 1,
+            owner_descriptions: [
+              { type: 'html', value: 'This item is listed on the Steam Community Market and cannot be consumed or modified while listed.' },
+            ],
+          },
+        ],
+        more_items: false,
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const result = await createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    fetchImpl,
+    now: () => (HOLD_ENDS_AT - 86_400) * 1_000,
+  }).readInventoryContext('2');
+
+  const held = result.items.find((item) => item.assetId === '111');
+  const free = result.items.find((item) => item.assetId === '222');
+
+  assert.equal(held?.tradableAfter, HOLD_ENDS_AT);
+  // A dated hold in context 2 must report as held; before this parse the flag
+  // only ever fired for context 16, so market-visible holds looked tradable.
+  assert.equal(held?.onHold, true);
+  // An owner-description without a date token is not a hold.
+  assert.equal(free?.tradableAfter, undefined);
+  assert.equal(free?.onHold, false);
+});

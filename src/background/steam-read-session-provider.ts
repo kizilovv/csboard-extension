@@ -208,6 +208,46 @@ function buildDescriptionMap(descriptions: readonly unknown[]): Map<string, Reco
   return map;
 }
 
+/**
+ * Recovers the trade-hold end from the owner-only description.
+ *
+ * Steam leaves `tradable_after` empty on this inventory read (verified against
+ * a live account: 57 held context-16 assets, zero with the field, and no
+ * `cache_expiration` either). The instant it does ship is a BBCode token inside
+ * `owner_descriptions`:
+ *
+ *   "This item is trade-protected and cannot be consumed, modified, or
+ *    transferred until [date]1786384800[/date]"
+ *
+ * The payload carries the raw Unix seconds — the human date the Steam client
+ * shows is rendered from it locally — so this parse is independent of the
+ * account's language and cannot break when Steam translates the sentence.
+ *
+ * Only `owner_descriptions` carries it, and Steam serves those exclusively to
+ * the signed-in owner. That is why no server-side reader can recover a hold end
+ * date: it is not in any response a third party can obtain.
+ *
+ * Matching is on the token, not the prose. Steam emits at most one dated
+ * owner-description per item; the latest wins so a future second line can never
+ * shorten a hold.
+ */
+function tradableAfterFromOwnerDescriptions(
+  description: Record<string, unknown>,
+): number | undefined {
+  let latest: number | undefined;
+  for (const entry of asArray(description['owner_descriptions'])) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    const value = optionalString((entry as Record<string, unknown>)['value'], 1_024);
+    if (!value) continue;
+    for (const match of value.matchAll(/\[date\](\d{1,10})\[\/date\]/g)) {
+      const seconds = optionalInteger(match[1]);
+      if (seconds === undefined || seconds === 0) continue;
+      if (latest === undefined || seconds > latest) latest = seconds;
+    }
+  }
+  return latest;
+}
+
 function normalizeIconUrl(value: unknown): string | undefined {
   const iconPath = optionalString(value, 512);
   if (!iconPath) return undefined;
@@ -498,7 +538,7 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         const marketable = Number(description['marketable']) === 1;
         const tradableAfter = optionalInteger(
           property?.['tradable_after'] ?? asset['tradable_after'],
-        );
+        ) ?? tradableAfterFromOwnerDescriptions(description);
         const name = optionalString(description['name'], 240);
         const iconUrl = normalizeIconUrl(description['icon_url']);
         items.push({
