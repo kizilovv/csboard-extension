@@ -145,6 +145,13 @@ function assertOffer(offer: PortfolioOfferDto, path: string): void {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.state` });
   }
   assertTimestamp(offer.createdAt, `${path}.createdAt`);
+  if (offer.completedTradeId !== undefined) {
+    assertIdentifier(offer.completedTradeId, `${path}.completedTradeId`);
+  }
+  if (offer.marketplaceHint !== undefined &&
+      offer.marketplaceHint !== 'buff163' && offer.marketplaceHint !== 'csfloat') {
+    throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.marketplaceHint` });
+  }
   if (offer.createdAt === 0 || offer.itemsToGive.length > 200 ||
       offer.itemsToReceive.length > 200) {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path });

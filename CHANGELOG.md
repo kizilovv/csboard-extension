@@ -13,8 +13,11 @@
 - Added opt-in CSFolder-authorized, HPKE-encrypted device pairing and portfolio
   sync for inventory contexts 2/16 plus up to 100 most recent Steam trades.
   The same consent-gated path supports Sync now and automatic sync about once
-  per hour. Active trade offers and Steam Market history are not uploaded in
-  1.1. Five-minute codes are hash-only at rest, consumed through a dedicated
+  per hour. Enabling Trade History also uploads correlation metadata for
+  accepted offers from the last 30 days, including an optional completed trade
+  ID and allowlisted Buff163/CSFloat hint. Active trade offers, raw Steam offer
+  notes/messages and Steam Market history are not uploaded in 1.1. Five-minute
+  codes are hash-only at rest, consumed through a dedicated
   server-to-server HMAC channel, and never expose Steam credentials.
 - Scoped inventory identity to app/context/asset, minimized redundant display
   metadata before chunking, and verified a rich 5,000-item snapshot remains

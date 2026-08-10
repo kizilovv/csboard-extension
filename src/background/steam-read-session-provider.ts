@@ -3,6 +3,7 @@ import {
   MAX_PORTFOLIO_OFFERS_PER_RUN,
   assertSteamId64,
   type PortfolioItemDto,
+  type PortfolioMarketplaceHint,
   type PortfolioOfferDto,
   type PortfolioTradeDto,
   type PortfolioTradeItemDto,
@@ -175,6 +176,31 @@ function optionalFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+/**
+ * Reduce a private Steam offer note to one allowlisted venue signal. The note
+ * itself never enters the portfolio DTO, logs, storage, or the gateway.
+ */
+function marketplaceHintFromOfferMessage(value: unknown): PortfolioMarketplaceHint | undefined {
+  const message = optionalString(value, 1_024)?.toLowerCase();
+  if (!message) return undefined;
+  const compactMessage = message.trim().replace(/\s+/g, ' ');
+  const hints = new Set<PortfolioMarketplaceHint>();
+  const mentionsExplicitBuff = /\b(?:buff163|buff\.163(?:\.com)?|buff\.market)\b/.test(message);
+  const mentionsBareBuff = /\bbuff\b/.test(message);
+  const mentionsBareBuffVenue = compactMessage === 'buff' ||
+    /\b(?:from|via|on)\s+buff\b/.test(message) ||
+    /\bbuff\s+(?:order|purchase|delivery)\b/.test(message);
+  const mentionsCsfloat = /\b(?:csfloat|csgofloat)(?:\.com)?\b/.test(message);
+  if ((mentionsExplicitBuff || mentionsBareBuff) && mentionsCsfloat) return undefined;
+  // Steam marketplace notes commonly contain the venue name or domain. Keep
+  // bare `buff` conservative so normal prose cannot trigger purchase booking.
+  if (mentionsExplicitBuff || mentionsBareBuffVenue) {
+    hints.add('buff163');
+  }
+  if (mentionsCsfloat) hints.add('csfloat');
+  return hints.size === 1 ? [...hints][0] : undefined;
+}
+
 function compareAscii(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -340,6 +366,7 @@ function normalizeTradeItem(
   value: unknown,
   descriptions: Map<string, Record<string, unknown>>,
   path: string,
+  direction: 'given' | 'received',
 ): PortfolioTradeItemDto | null {
   const asset = asRecord(value, path);
   const appId = optionalString(asset['appid'], 10) ?? '730';
@@ -347,10 +374,25 @@ function normalizeTradeItem(
   const classId = requiredDigits(asset['classid'], `${path}.classid`);
   const instanceId = requiredDigits(asset['instanceid'] ?? '0', `${path}.instanceid`);
   const description = descriptions.get(`${classId}:${instanceId}`);
+  const newAssetId = direction === 'received'
+    ? optionalString(asset['new_assetid'], 32)
+    : undefined;
+  const newContextId = direction === 'received'
+    ? optionalString(asset['new_contextid'], 4)
+    : undefined;
+  // Steam changes an asset's identity when ownership moves. Use the new pair
+  // atomically for received items so it matches the current inventory; a
+  // malformed or incomplete pair falls back to the original identity.
+  const useReceivedIdentity = newAssetId !== undefined && newContextId !== undefined &&
+    /^[0-9]{1,32}$/.test(newAssetId) && /^[0-9]{1,4}$/.test(newContextId);
   return {
     appId: '730',
-    contextId: requiredDigits(asset['contextid'] ?? '2', `${path}.contextid`, 4),
-    assetId: requiredDigits(asset['assetid'], `${path}.assetid`),
+    contextId: useReceivedIdentity
+      ? newContextId
+      : requiredDigits(asset['contextid'] ?? '2', `${path}.contextid`, 4),
+    assetId: useReceivedIdentity
+      ? newAssetId
+      : requiredDigits(asset['assetid'], `${path}.assetid`),
     classId,
     instanceId,
     amount: requiredDigits(asset['amount'] ?? '1', `${path}.amount`),
@@ -362,9 +404,15 @@ function normalizeTradeItems(
   value: unknown,
   descriptions: Map<string, Record<string, unknown>>,
   path: string,
+  direction: 'given' | 'received',
 ): readonly PortfolioTradeItemDto[] {
   return asArray(value)
-    .map((entry, index) => normalizeTradeItem(entry, descriptions, `${path}[${index}]`))
+    .map((entry, index) => normalizeTradeItem(
+      entry,
+      descriptions,
+      `${path}[${index}]`,
+      direction,
+    ))
     .filter((entry): entry is PortfolioTradeItemDto => entry !== null);
 }
 
@@ -605,11 +653,13 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           trade['assets_given'],
           descriptions,
           `$.trades[${index}].assets_given`,
+          'given',
         ),
         itemsReceived: normalizeTradeItems(
           trade['assets_received'],
           descriptions,
           `$.trades[${index}].assets_received`,
+          'received',
         ),
       };
     });
@@ -653,15 +703,25 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     const normalizeOffers = (
       value: unknown,
       direction: PortfolioOfferDto['direction'],
-    ): PortfolioOfferDto[] => asArray(value).map((entry, index) => {
+    ): PortfolioOfferDto[] => asArray(value).flatMap((entry, index): PortfolioOfferDto[] => {
       const path = direction === 'sent' ? '$.trade_offers_sent' : '$.trade_offers_received';
       const offer = asRecord(entry, `${path}[${index}]`);
       const state = optionalInteger(offer['trade_offer_state']);
-      const createdAt = optionalInteger(offer['time_created']);
-      if (!state || state > 32 || !createdAt) {
+      if (!state || state > 32) {
         throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}[${index}]` });
       }
-      return {
+      // Portfolio sync is a record of item movement, so only accepted offers
+      // belong here. This gate is also a privacy boundary: notes, trade ids,
+      // counterparties and item arrays on live/declined/cancelled offers must
+      // never be inspected or classified by the portfolio path.
+      if (state !== 3) return [];
+      const createdAt = optionalInteger(offer['time_created']);
+      if (!createdAt) {
+        throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}[${index}]` });
+      }
+      const completedTradeId = optionalString(offer['tradeid'], 32);
+      const marketplaceHint = marketplaceHintFromOfferMessage(offer['message']);
+      return [{
         offerId: requiredDigits(offer['tradeofferid'], `${path}[${index}].tradeofferid`),
         direction,
         partnerAccountId: requiredDigits(
@@ -671,6 +731,13 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         ),
         state,
         createdAt,
+        ...(completedTradeId !== undefined ? {
+          completedTradeId: requiredDigits(
+            completedTradeId,
+            `${path}[${index}].tradeid`,
+          ),
+        } : {}),
+        ...(marketplaceHint !== undefined ? { marketplaceHint } : {}),
         ...(optionalInteger(offer['expiration_time']) !== undefined ? {
           expiresAt: optionalInteger(offer['expiration_time']),
         } : {}),
@@ -681,13 +748,15 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           offer['items_to_give'],
           descriptions,
           `${path}[${index}].items_to_give`,
+          'given',
         ),
         itemsToReceive: normalizeTradeItems(
           offer['items_to_receive'],
           descriptions,
           `${path}[${index}].items_to_receive`,
+          'received',
         ),
-      };
+      }];
     });
     const normalized = [
       ...normalizeOffers(response['trade_offers_received'], 'received'),

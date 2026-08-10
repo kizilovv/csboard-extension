@@ -60,8 +60,11 @@ Features:
 
 Portfolio uploads are off by default. Pairing does not enable them. After you
 enable uploads and a source, you can sync immediately and automatic sync is
-scheduled about once per hour. Version 1.1 does not upload active trade offers
-or Steam Market history.
+scheduled about once per hour. When Trade History is enabled, accepted offers
+from the last 30 days provide correlation metadata, including an optional
+completed trade ID and allowlisted Buff163/CSFloat marketplace hint. Active
+trade offers and raw Steam offer notes/messages are not uploaded. Version 1.1
+does not upload Steam Market history.
 
 Steam cookies, session/access tokens, passwords, Steam Guard secrets and raw
 authenticated pages are never uploaded. Steam Market or trade-page actions run
@@ -151,18 +154,22 @@ Dashboard.
   name, wear, paint, stickers, holds, prices and trade item identities are read
   to render the requested feature. Only the separately opted-in portfolio
   subset is uploaded.
+- Personal communications: for accepted offers from the last 30 days, an offer
+  note may be inspected in memory only to derive an allowlisted Buff163/CSFloat
+  hint. Raw Steam offer notes/messages are not logged, stored or uploaded.
 
 ### Do not select unless Dashboard wording changes or runtime changes
 
 - Health information
-- Personal communications
 - Location
 - Web history
 - User activity / behavioral tracking
 
 The extension does not collect arbitrary browsing history, clicks, keystrokes,
-scrolling, messages or location. Merely running a declared content script on a
-supported page must not be represented as analytics.
+scrolling, unrelated messages or location. The only message-like content it
+handles is the bounded accepted-offer note processing disclosed above; the raw
+note remains in memory only and is discarded. Merely running a declared content
+script on a supported page must not be represented as analytics.
 
 ## Limited Use certification
 
@@ -183,10 +190,11 @@ The matching affirmative statement is in `PRIVACY.md` under
 ## Prominent consent flow for portfolio upload
 
 The popup must show the open `Data and automatic sync` disclosure before the
-portfolio master switch. Pairing keeps the switch and every source off. Upload
-begins only after the user separately enables the master switch and at least
-one source. The disclosure names both supported sources, the 100-trade bound
-and the hourly automatic schedule.
+portfolio master switch. Pairing keeps the switch and both visible sources off.
+Upload begins only after the user separately enables the master switch and at
+least one source. The disclosure names both visible sources, the 100-trade
+bound, the accepted-offer enrichment that follows Trade History, its raw-note
+exclusion and the hourly automatic schedule.
 
 ## Reviewer test instructions
 
@@ -199,7 +207,8 @@ Paste the following into the optional Dashboard test-instructions field:
 > their own logged-in Steam/CSBOARD/CSFolder sessions. Open the extension popup
 > to see that portfolio pairing, the upload master switch and both sources are
 > off by default. Pairing alone keeps uploads off. The open disclosure explains
-> the inventory/trade fields and hourly automatic schedule before consent.
+> the inventory/trade fields, accepted-offer correlation, raw-note exclusion and
+> hourly automatic schedule before consent.
 > Steam credentials are never entered into the extension or sent to CSBOARD.
 
 If CWS requests a dedicated test account, create and provide it only through

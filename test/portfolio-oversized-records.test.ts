@@ -134,13 +134,9 @@ test('the portfolio carries only offers that actually moved items', async () => 
   provider.offerAccessToken('a'.repeat(40), STEAM_ID);
 
   const result = await provider.readTradeOffers();
-  // The provider reads what Steam has; narrowing to accepted offers is the
-  // portfolio's decision and happens in the collector, because the trade-offers
-  // page prices live offers through this very same read.
-  assert.deepEqual(
-    result.offers.map((offer) => offer.state).sort((a, b) => a - b),
-    states.map((entry) => entry.state).sort((a, b) => a - b),
-  );
+  // The portfolio provider is intentionally narrower than the page-facing
+  // readTradeOffersForDisplay path: only accepted offers may cross it.
+  assert.deepEqual(result.offers.map((offer) => offer.state), [3]);
   // The historical half is bounded too, so a long-lived account does not pull
   // years of dead offers just to discard them.
   assert.match(requestedUrl, /time_historical_cutoff=\d+/);

@@ -61,19 +61,20 @@ test('portfolio and pairing commands are explicitly versioned internal messages'
   ]);
 });
 
-test('retired portfolio trade offers are not advertised or recorded as collected', () => {
+test('accepted-offer enrichment follows trade-history consent and stays out of popup controls', () => {
   const worker = readFileSync(
     new URL('../src/background/service-worker.ts', import.meta.url),
     'utf8',
   );
-  const controller = readFileSync(
-    new URL('../src/background/gateway-controller.ts', import.meta.url),
-    'utf8',
-  );
+  const popup = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
 
-  assert.match(worker, /source === 'tradeOffers' \|\| source === 'marketHistory'/);
+  assert.match(
+    worker,
+    /tradeOffers:\s*settings\.portfolioSyncEnabled\s*&&\s*settings\.portfolioSources\.tradeHistory/,
+  );
   assert.doesNotMatch(worker, /tradeOffers: result\.offers/);
-  assert.doesNotMatch(controller, /'trade-offers'/);
+  assert.doesNotMatch(popup, /data-source="tradeOffers"/);
+  assert.doesNotMatch(popup, /id="source-trade-offers-status"/);
 });
 
 test('P2P listing UI requires distinct review and confirm clicks and exposes ineligibility reasons', () => {

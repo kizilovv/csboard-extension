@@ -102,6 +102,7 @@ async function bundledWorker(): Promise<string> {
             'export {',
             '  portfolioAutoSyncFailureState as __testPortfolioAutoSyncFailureState,',
             '  sourceStatus as __testPortfolioSourceStatus,',
+            '  portfolioCollectorSources as __testPortfolioCollectorSources,',
             '  portfolioSyncSuccessStatus as __testPortfolioSyncSuccessStatus,',
             '  beginPortfolioUnpairFence as __testBeginPortfolioUnpairFence,',
             '  finishPortfolioUnpairAttempt as __testFinishPortfolioUnpairAttempt,',
@@ -242,6 +243,7 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
       runtimeState: string,
       stored: Bag,
     ) => Bag;
+    __testPortfolioCollectorSources: (settings: Bag) => Bag;
     __testPortfolioSyncSuccessStatus: (
       previous: Bag,
       settings: Bag,
@@ -276,7 +278,7 @@ test('portfolio automatic sync remains opt-in by default', () => {
   assert.equal(Object.values(DEFAULT_POPUP_SETTINGS.portfolioSources).some(Boolean), false);
 });
 
-test('retired trade offers stay unavailable and never receive synthetic sync records', async () => {
+test('trade history consent enables privacy-safe offer enrichment without exposing a source row', async () => {
   const { workerModule } = await loadWorker();
   const previous = {
     lastAttemptedAt: 1,
@@ -291,7 +293,52 @@ test('retired trade offers stay unavailable and never receive synthetic sync rec
     {
       enabled: false,
       state: 'disabled',
-      errorCode: 'NOT_AVAILABLE_IN_1_1',
+    },
+  );
+
+  assert.deepEqual(
+    workerModule.__testPortfolioCollectorSources({
+      ...DEFAULT_POPUP_SETTINGS,
+      portfolioSyncEnabled: true,
+      portfolioSources: {
+        ...DEFAULT_POPUP_SETTINGS.portfolioSources,
+        tradeHistory: true,
+      },
+    }),
+    {
+      inventory: false,
+      tradeHistory: true,
+      tradeOffers: true,
+    },
+  );
+  assert.deepEqual(
+    workerModule.__testPortfolioCollectorSources({
+      ...DEFAULT_POPUP_SETTINGS,
+      portfolioSyncEnabled: false,
+      portfolioSources: {
+        ...DEFAULT_POPUP_SETTINGS.portfolioSources,
+        tradeHistory: true,
+      },
+    }),
+    {
+      inventory: false,
+      tradeHistory: false,
+      tradeOffers: false,
+    },
+  );
+  assert.deepEqual(
+    workerModule.__testPortfolioCollectorSources({
+      ...DEFAULT_POPUP_SETTINGS,
+      portfolioSyncEnabled: true,
+      portfolioSources: {
+        ...DEFAULT_POPUP_SETTINGS.portfolioSources,
+        inventory: true,
+      },
+    }),
+    {
+      inventory: true,
+      tradeHistory: false,
+      tradeOffers: false,
     },
   );
 
@@ -303,7 +350,7 @@ test('retired trade offers stay unavailable and never receive synthetic sync rec
       portfolioSources: {
         ...DEFAULT_POPUP_SETTINGS.portfolioSources,
         inventory: true,
-        tradeOffers: true,
+        tradeHistory: true,
       },
     },
     {
@@ -317,7 +364,7 @@ test('retired trade offers stay unavailable and never receive synthetic sync rec
     10,
     20,
   );
-  assert.deepEqual(success.sourceRecords, { inventory: 7 });
+  assert.deepEqual(success.sourceRecords, { inventory: 7, tradeHistory: 0 });
   assert.deepEqual(success.sourceErrors, {});
   assert.deepEqual(success.sourceWarnings, {});
 });

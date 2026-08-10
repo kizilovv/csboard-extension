@@ -194,12 +194,18 @@ export interface PortfolioTradeDto {
   readonly itemsReceived: readonly PortfolioTradeItemDto[];
 }
 
+export type PortfolioMarketplaceHint = 'buff163' | 'csfloat';
+
 export interface PortfolioOfferDto {
   readonly offerId: string;
   readonly direction: 'sent' | 'received';
   readonly partnerAccountId: string;
   readonly state: number;
   readonly createdAt: number;
+  /** Accepted Steam offer -> completed economy trade correlation, when Steam exposes it. */
+  readonly completedTradeId?: string;
+  /** Privacy-preserving local classification; the raw user-written offer message is never uploaded. */
+  readonly marketplaceHint?: PortfolioMarketplaceHint;
   readonly expiresAt?: number;
   readonly escrowEndAt?: number;
   readonly itemsToGive: readonly PortfolioTradeItemDto[];

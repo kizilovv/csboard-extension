@@ -196,18 +196,10 @@ const getGatewayController = createRetryingLazyPromise(async () => {
     createSteamProvider: (steamId) => getSteamReadProvider(steamId),
     getEnabledSources: async () => {
       const settings = await getSettings();
-      const sources = {
-        inventory: settings.portfolioSyncEnabled && settings.portfolioSources.inventory,
-        tradeHistory: settings.portfolioSyncEnabled && settings.portfolioSources.tradeHistory,
-        // Accepted offers describe the same events as trade history, so the
-        // portfolio no longer collects them at all — one fewer Steam call per
-        // sync for data we already have.
-        tradeOffers: false,
-      };
       if (!settings.portfolioSyncEnabled || !hasEnabledPortfolioSource(settings)) {
         throw new Error('PORTFOLIO_SYNC_NOT_ENABLED');
       }
-      return sources;
+      return portfolioCollectorSources(settings);
     },
   });
 });
@@ -220,13 +212,31 @@ function getGatewayDeviceKeys(): IndexedDbDeviceKeyStore {
 type ExtensionSettings = Awaited<ReturnType<typeof getSettings>>;
 
 /**
- * Version 1.1 intentionally supports only inventory and completed trade
- * history. Accepted offers duplicate trade-history events, while market
- * history is not shipped yet. Keeping this gate shared prevents the manual and
- * automatic paths from quietly disagreeing about what an enabled source is.
+ * Only user-visible sources count as consent entry points. Accepted-offer
+ * correlation is a bounded enrichment of Trade History, not a third setting;
+ * Steam Market history is not shipped yet.
  */
 function hasEnabledPortfolioSource(settings: ExtensionSettings): boolean {
   return settings.portfolioSources.inventory || settings.portfolioSources.tradeHistory;
+}
+
+/**
+ * Translate the two simple popup choices into collector reads. Trade History
+ * automatically carries accepted-offer correlation metadata so CSFolder can
+ * match a completed trade to its venue hint. The provider/collector boundary
+ * limits this read to accepted offers from the last 30 days and strips raw
+ * Steam notes before the payload exists.
+ */
+function portfolioCollectorSources(settings: ExtensionSettings): {
+  readonly inventory: boolean;
+  readonly tradeHistory: boolean;
+  readonly tradeOffers: boolean;
+} {
+  return {
+    inventory: settings.portfolioSyncEnabled && settings.portfolioSources.inventory,
+    tradeHistory: settings.portfolioSyncEnabled && settings.portfolioSources.tradeHistory,
+    tradeOffers: settings.portfolioSyncEnabled && settings.portfolioSources.tradeHistory,
+  };
 }
 
 async function readStoredPortfolioUiStatus(): Promise<StoredPortfolioUiStatus> {
@@ -300,7 +310,12 @@ function sourceStatus(
   runtimeState: 'idle' | 'syncing' | 'error',
   stored: StoredPortfolioUiStatus,
 ): PortfolioSourceStatus {
-  if (source === 'tradeOffers' || source === 'marketHistory') {
+  // Accepted offers are hidden enrichment of Trade History: no independent
+  // toggle, progress row, error badge or record counter is exposed.
+  if (source === 'tradeOffers') {
+    return { enabled: false, state: 'disabled' };
+  }
+  if (source === 'marketHistory') {
     return { enabled: false, state: 'disabled', errorCode: 'NOT_AVAILABLE_IN_1_1' };
   }
   if (!enabled) return { enabled: false, state: 'disabled' };
@@ -569,7 +584,7 @@ function validateSettingsPatch(
         if (typeof sourceRecord[key] !== 'boolean') throw new Error('INVALID_PORTFOLIO_SOURCES');
         if ((key === 'tradeOffers' || key === 'marketHistory') && sourceRecord[key]) {
           throw new Error(key === 'tradeOffers'
-            ? 'TRADE_OFFERS_NOT_AVAILABLE'
+            ? 'TRADE_OFFERS_MANAGED_AUTOMATICALLY'
             : 'MARKET_HISTORY_NOT_AVAILABLE');
         }
         next[key] = sourceRecord[key];
@@ -789,8 +804,9 @@ function portfolioSyncSuccessStatus(
   const sourceRecords: Partial<Record<PortfolioSource, number>> = {
     ...previous.sourceRecords,
   };
-  // These sources are not collected by 1.1. Remove stale pre-release values as
-  // well as refusing to manufacture a misleading `tradeOffers: 0` record.
+  // Accepted offers are collected only as hidden Trade History enrichment.
+  // Remove stale values rather than exposing a third source counter. Steam
+  // Market history remains unavailable in 1.1.
   delete sourceRecords.tradeOffers;
   delete sourceRecords.marketHistory;
   if (settings.portfolioSources.inventory && !failedSources.has('inventory')) {

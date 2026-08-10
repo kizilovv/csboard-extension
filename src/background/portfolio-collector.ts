@@ -58,10 +58,10 @@ const MAX_RECORD_ITEMS_PER_SIDE = 200;
  * account this was measured against. Offers still in flight belong to P2P order
  * tracking, not to a record of what the account owns and traded.
  *
- * 🔴 This filter lives here, not in the provider: the trade-offers page reads
- * through the same provider to price the offer in front of the user, and
- * filtering there made every active offer — the only kind that page shows —
- * disappear along with its prices.
+ * The portfolio provider applies the same accepted-only gate before inspecting
+ * offer fields. Keep this collector filter as defense in depth; the trade-offers
+ * page uses the separate `readTradeOffersForDisplay` path so active offers and
+ * their visible price enrichment remain available there.
  */
 const PORTFOLIO_OFFER_STATES = new Set([3]);
 

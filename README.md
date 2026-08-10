@@ -14,7 +14,7 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 - Popup settings for currency, price source, CSBOARD-settings sync and the CSBOARD comparison on CSFloat.
 - Opt-in BetterBuff-style helpers on Buff163: listing age, selected-currency display, explicit live-price comparisons and safe item/search links. The Buff surface is off by default and never uploads Buff responses.
 - Steam `Sell`, `Quick Sell`, `Instant Sell` and sequential bulk review. Every write is initiated and confirmed by the user and goes directly to Steam.
-- Optional CSFolder-authorized portfolio pairing and synchronization of normalized own-inventory contexts `2` and `16` plus up to 100 most recent Steam trades. Uploads and every source are off by default; after explicit opt-in the same safe path supports Sync now and automatic sync about once per hour. Version 1.1 does not upload active trade offers or Steam Market history.
+- Optional CSFolder-authorized portfolio pairing and synchronization of normalized own-inventory contexts `2` and `16` plus up to 100 most recent Steam trades. When Trade History is enabled, accepted offers from the last 30 days add correlation metadata: an optional completed trade ID and allowlisted Buff163/CSFloat marketplace hint. Active trade offers and raw Steam offer notes/messages are not uploaded, and Steam Market history remains unavailable. Uploads and both visible sources are off by default; after explicit opt-in the same safe path supports Sync now and automatic sync about once per hour.
 - P2P eligibility plus reviewed publish/unpublish for the user's CSBOARD listing. Version 1.1 has no P2P buy/order/settlement capability and does not let CSBOARD or a website create, accept or confirm a Steam trade.
 
 ## Security boundary
@@ -111,4 +111,4 @@ dependency notices.
 
 ## Privacy
 
-There is no advertising, behavioral analytics or remote telemetry by default. Portfolio synchronization is disabled until the user pairs and explicitly enables it; source toggles are independent. See [PRIVACY.md](PRIVACY.md) for the exact collected fields and exclusions.
+There is no advertising, behavioral analytics or remote telemetry by default. Portfolio synchronization is disabled until the user pairs and explicitly enables it. Inventory and Trade History are the only visible source choices; accepted-offer correlation follows Trade History. See [PRIVACY.md](PRIVACY.md) for the exact collected fields and exclusions.

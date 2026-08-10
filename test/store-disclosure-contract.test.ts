@@ -24,14 +24,20 @@ const worker = readFileSync(
 
 test('portfolio disclosures match the supported upload sources and hourly opt-in scheduler', () => {
   assert.match(worker, /const PORTFOLIO_AUTO_SYNC_MINUTES = 60;/);
-  assert.match(worker, /source === 'tradeOffers' \|\| source === 'marketHistory'/);
+  assert.match(
+    worker,
+    /tradeOffers:\s*settings\.portfolioSyncEnabled\s*&&\s*settings\.portfolioSources\.tradeHistory/,
+  );
 
   assert.match(privacy, /up to 100 (?:most )?recent Steam trades/i);
   assert.match(privacy, /automatic sync[^.]*once per hour/i);
-  assert.match(privacy, /does not upload (?:active )?trade offers/i);
+  assert.match(privacy, /accepted offers[^.]*last 30 days/i);
+  assert.match(privacy, /completed trade id[^.]*marketplace hint/i);
+  assert.match(privacy, /active trade offers[^.]*not uploaded/i);
+  assert.match(privacy, /raw Steam (?:offer )?(?:notes|messages)[^.]*not uploaded/i);
   assert.match(privacy, /does not upload Steam Market (?:sales\/listing )?history/i);
   assert.match(privacy, /Chrome Web Store User Data Policy[^.]*Limited Use/i);
-  assert.doesNotMatch(privacy, /^\| Trade offers \|/m);
+  assert.match(privacy, /^\| Accepted-offer correlation \|/m);
   assert.doesNotMatch(privacy, /uploads the deterministically newest 1,000/i);
 
   const popupDisclosure = popupHtml.match(
@@ -39,7 +45,9 @@ test('portfolio disclosures match the supported upload sources and hourly opt-in
   )?.[1] ?? '';
   assert.match(popupDisclosure, /up to 100 (?:most )?recent Steam trades/i);
   assert.match(popupDisclosure, /automatic sync[^.]*once per hour/i);
-  assert.match(popupDisclosure, /Trade offers and Steam Market history are not uploaded/i);
+  assert.match(popupDisclosure, /accepted offers[^.]*last 30 days/i);
+  assert.match(popupDisclosure, /active offers[^.]*raw Steam notes[^.]*not uploaded/i);
+  assert.match(popupDisclosure, /Steam Market history[^.]*not uploaded/i);
   assert.doesNotMatch(popupDisclosure, /market facts/i);
 
   assert.match(popupHtml, /allows manual sync and automatic sync[^.]*once per hour/i);
@@ -53,9 +61,11 @@ test('portfolio disclosures match the supported upload sources and hourly opt-in
 
   assert.match(storeListing, /up to 100 most recent Steam trades/i);
   assert.match(storeListing, /automatic sync[^.]*once per hour/i);
-  assert.match(storeListing, /does not upload active trade offers/i);
+  assert.match(storeListing, /accepted offers[^.]*last 30 days/i);
+  assert.match(storeListing, /completed trade id[^.]*marketplace hint/i);
+  assert.match(storeListing, /active\s+trade offers[^.]*not uploaded/i);
+  assert.match(storeListing, /raw Steam (?:offer )?(?:notes|messages)[^.]*not uploaded/i);
   assert.match(storeListing, /does not upload[^.]*Steam Market history/i);
-  assert.doesNotMatch(storeListing, /uploads (?:active )?trade offers/i);
 
   for (const publicReleaseCopy of [readme, changelog]) {
     const normalizedCopy = publicReleaseCopy.replace(/\s+/g, ' ');
@@ -63,12 +73,10 @@ test('portfolio disclosures match the supported upload sources and hourly opt-in
     assert.match(normalizedCopy, /automatic sync[^.]*once per hour/i);
     assert.match(
       normalizedCopy,
-      /(?:does not upload active trade offers|active trade offers[^.]*not uploaded)/i,
+      /accepted offers[^.]*last 30 days/i,
     );
-    assert.doesNotMatch(
-      publicReleaseCopy,
-      /portfolio sync[^.\n]*(?:includes|for)[^.\n]*trade offers/i,
-    );
+    assert.match(normalizedCopy, /active (?:trade )?offers[^.]*not uploaded/i);
+    assert.match(normalizedCopy, /raw Steam (?:offer )?(?:notes|messages)[^.]*not uploaded/i);
   }
 });
 
