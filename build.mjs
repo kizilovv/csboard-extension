@@ -6,6 +6,11 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { createHash } from 'crypto';
+import {
+  assertNoStagingPath,
+  bundledPackageName,
+  stagedEntry,
+} from './scripts/build-reproducibility.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(__dirname, 'src');
@@ -139,7 +144,7 @@ const common = {
 console.log('Building service worker...');
 bundle('service-worker', {
   ...common,
-  entryPoints: [resolve(BUNDLE_SRC, 'background/service-worker.ts')],
+  entryPoints: [stagedEntry(STAGING_ROOT, BUNDLE_SRC, 'background/service-worker.ts')],
   outfile: resolve(BUILD, 'service-worker.js'),
   format: 'esm',
 });
@@ -153,7 +158,7 @@ const popupBuildDir = resolve(BUILD, 'popup');
 mkdirSync(popupBuildDir, { recursive: true });
 bundle('popup', {
   ...common,
-  entryPoints: [resolve(BUNDLE_SRC, 'popup/popup.ts')],
+  entryPoints: [stagedEntry(STAGING_ROOT, BUNDLE_SRC, 'popup/popup.ts')],
   outfile: resolve(popupBuildDir, 'popup.js'),
 });
 
@@ -215,7 +220,7 @@ for (const { entry, out } of contentScripts) {
   mkdirSync(dirname(resolve(BUILD, out)), { recursive: true });
   bundle(out.replace(/[^a-z0-9.-]+/gi, '_'), {
     ...common,
-    entryPoints: [entryPath],
+    entryPoints: [stagedEntry(STAGING_ROOT, BUNDLE_SRC, entry)],
     outfile: resolve(BUILD, out),
   });
 }
@@ -297,14 +302,7 @@ for (const name of ['LICENSE', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md']) {
 const bundledPackages = new Set();
 for (const metafile of metafiles.values()) {
   for (const input of Object.keys(metafile.inputs || {})) {
-    const normalized = input.replace(/\\/g, '/');
-    const marker = '/node_modules/';
-    const index = normalized.lastIndexOf(marker);
-    if (index < 0) continue;
-    const parts = normalized.slice(index + marker.length).split('/');
-    const packageName = parts[0]?.startsWith('@')
-      ? `${parts[0]}/${parts[1]}`
-      : parts[0];
+    const packageName = bundledPackageName(input);
     if (packageName) bundledPackages.add(packageName);
   }
 }
@@ -326,6 +324,12 @@ for (const packageName of [...bundledPackages].sort()) {
 // Final sweep — guarantees we never leave Chrome-reserved or duplicate files
 // behind, regardless of previous state.
 purgeJunk(BUILD);
+
+// A random mkdtemp suffix in esbuild's source-boundary comments makes two
+// builds from the same commit produce different Store archives. Relative entry
+// points should prevent it; keep this fail-closed assertion so a future esbuild
+// change cannot silently break reproducibility or leak a local build path.
+assertNoStagingPath(BUILD, STAGING_ROOT);
 
 rmSync(BUILD_META, { recursive: true, force: true });
 mkdirSync(BUILD_META, { recursive: true });
