@@ -14,7 +14,7 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 - Popup settings for currency, price source, CSBOARD-settings sync and the CSBOARD comparison on CSFloat.
 - Opt-in BetterBuff-style helpers on Buff163: listing age, selected-currency display, explicit live-price comparisons and safe item/search links. The Buff surface is off by default and never uploads Buff responses.
 - Steam `Sell`, `Quick Sell`, `Instant Sell` and sequential bulk review. Every write is initiated and confirmed by the user and goes directly to Steam.
-- Optional CSFolder-authorized portfolio pairing and manual synchronization of normalized own-inventory contexts `2` and `16`, trade-offer summaries and trade-history summaries. Offer reads deterministically keep the newest 1,000 records and surface a non-fatal popup warning if Steam returns more.
+- Optional CSFolder-authorized portfolio pairing and synchronization of normalized own-inventory contexts `2` and `16` plus up to 100 most recent Steam trades. Uploads and every source are off by default; after explicit opt-in the same safe path supports Sync now and automatic sync about once per hour. Version 1.1 does not upload active trade offers or Steam Market history.
 - P2P eligibility plus reviewed publish/unpublish for the user's CSBOARD listing. Version 1.1 has no P2P buy/order/settlement capability and does not let CSBOARD or a website create, accept or confirm a Steam trade.
 
 ## Security boundary

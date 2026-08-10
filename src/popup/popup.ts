@@ -611,7 +611,7 @@ function sourceStatusText(source: PortfolioSource): string {
       ? ` · ${humanizeCode(status.warningCode)}`
       : ''}`;
     case 'error': return `Error${status.errorCode ? ` · ${humanizeCode(status.errorCode)}` : ''}`;
-    case 'disabled': return 'Enabled for the next manual sync';
+    case 'disabled': return 'Enabled for manual and hourly sync';
     case 'idle': return `Ready${count}`;
   }
 }
@@ -624,7 +624,7 @@ function portfolioSummary(): string {
     case 'paired':
       if (!settings.portfolioSyncEnabled) return 'Paired. Portfolio uploads remain off until you enable them.';
       if (portfolioStatus.paused) return 'Sync is paused by the connector. Review the status and retry manually.';
-      return 'Paired. Only enabled sources are included when you press Sync now.';
+      return 'Paired. Enabled sources sync automatically about once per hour; Sync now runs them immediately.';
     case 'revoked':
       return 'This device was revoked. Unpair it locally, then create a new one-time code.';
     case 'mismatch':
@@ -790,7 +790,7 @@ async function runManualSync(): Promise<void> {
       skippedSources.length > 0
         ? 'Sync finished, but one or more Steam sources were unavailable. Successful sources were uploaded safely.'
         : warnedSources.length > 0
-          ? 'Sync finished safely. Steam returned more trade offers than the connector limit, so the newest 1,000 were uploaded.'
+          ? 'Sync finished safely, but one or more oversized records were omitted.'
           : 'Manual portfolio sync finished.',
       skippedSources.length > 0 || warnedSources.length > 0 ? 'warning' : 'success',
     );

@@ -10,14 +10,15 @@
 - Hardened Sell, Quick Sell, Instant Sell and capped sequential bulk listing
   with exact own-asset checks, Steam wallet fee math, live reprice, review,
   explicit confirmation, rate-limit stop and Steam Guard result states.
-- Added opt-in CSFolder-authorized, HPKE-encrypted device pairing and manual
-  portfolio sync for inventory contexts 2/16, trade offers and trade history.
-  Five-minute codes are hash-only at rest, consumed through a dedicated
+- Added opt-in CSFolder-authorized, HPKE-encrypted device pairing and portfolio
+  sync for inventory contexts 2/16 plus up to 100 most recent Steam trades.
+  The same consent-gated path supports Sync now and automatic sync about once
+  per hour. Active trade offers and Steam Market history are not uploaded in
+  1.1. Five-minute codes are hash-only at rest, consumed through a dedicated
   server-to-server HMAC channel, and never expose Steam credentials.
 - Scoped inventory identity to app/context/asset, minimized redundant display
   metadata before chunking, and verified a rich 5,000-item snapshot remains
-  within 64 encrypted chunks. Trade-offer reads keep the newest 1,000
-  deterministically and show a non-fatal truncation warning when needed.
+  within 64 encrypted chunks.
 - Added the CSBOARD HPKE gateway, signed discovery, replay/idempotency controls,
   CSFolder normalized-fact outbox and non-destructive reconciliation inbox.
 - Added CSFloat listing age and sold-time metadata with safe reset behavior for

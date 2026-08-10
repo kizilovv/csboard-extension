@@ -147,10 +147,15 @@
           </label>
         </form>
 
+        <details class="privacy-disclosure" open>
+          <summary>Data and automatic sync</summary>
+          <p>If you enable uploads, the extension sends only current inventory facts and up to 100 most recent Steam trades from sources you enable. Automatic sync is scheduled about once per hour; Sync now runs it immediately. Trade offers and Steam Market history are not uploaded in version 1.1. Steam cookies, session tokens, passwords, Guard secrets, and raw authenticated pages never leave this browser.</p>
+        </details>
+
         <label id="portfolio-enable-row" class="setting-row hidden">
           <span>
             <span class="setting-title">Enable portfolio uploads</span>
-            <span class="setting-description">Off by default. Only enabled sources are included in a manual sync.</span>
+            <span class="setting-description">Off by default. Enabling this and a source allows manual sync and automatic sync about once per hour.</span>
           </span>
           <span class="switch">
             <input id="portfolio-sync-toggle" type="checkbox" disabled>
@@ -196,10 +201,6 @@
           <button id="unpair-device-btn" class="btn btn-danger-quiet" type="button">Unpair</button>
         </div>
 
-        <details class="privacy-disclosure">
-          <summary>What is uploaded?</summary>
-          <p>Only normalized item, hold, trade, and market facts from the sources you enable. Steam cookies, session tokens, passwords, Guard secrets, and raw authenticated pages never leave this browser.</p>
-        </details>
       </section>
 
       <section class="card" aria-labelledby="p2p-heading">
