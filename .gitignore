@@ -2,6 +2,7 @@ node_modules/
 build/
 dist/
 artifacts/build-meta/
+artifacts/e2e/
 artifacts/build-profile.json
 artifacts/releases/
 .git.broken/

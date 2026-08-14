@@ -105,12 +105,9 @@ test/               source-level unit and contract tests
 test-artifact/      black-box tests against the real bundled service worker
 ```
 
-See [docs/SYSTEM-MAP-PORTFOLIO-P2P.md](docs/SYSTEM-MAP-PORTFOLIO-P2P.md),
-[CHANGELOG.md](CHANGELOG.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-for the implemented integration map, release notes and dependency notices.
-The separately gated future settlement threat model is documented in
-[docs/SPEC-FUTURE-P2P-STEAM-ACTION-SETTLEMENT.md](docs/SPEC-FUTURE-P2P-STEAM-ACTION-SETTLEMENT.md);
-it is not implementation authority and is not part of version 1.1.
+See [CHANGELOG.md](CHANGELOG.md) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for release notes and
+dependency notices.
 
 ## Privacy
 
