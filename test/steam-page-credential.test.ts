@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import {
+  isTrustedSteamPageSender,
+  normalizeSteamPageCredential,
+} from '../src/shared/steam-page-credential.ts';
 
 const TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9.payload-part.signature-part';
 const STEAM_ID = '76561198000000042';
 const OTHER_STEAM_ID = '76561198000000001';
 
-function withDocument(html: string, attr?: string | null) {
+function withDocument(html: string, attr?: string | null, inlineScripts?: string[]) {
   const previous = (globalThis as Record<string, unknown>)['document'];
   (globalThis as Record<string, unknown>)['document'] = {
     documentElement: { innerHTML: html },
+    scripts: (inlineScripts ?? [html]).map((textContent) => ({ src: '', textContent })),
     querySelector(selector: string) {
       if (selector !== '#application_config' || attr === undefined) return null;
       return { getAttribute: () => attr };
@@ -25,7 +32,11 @@ async function readCredential() {
 }
 
 test('the page credential is read from the application config attribute', async () => {
-  const restore = withDocument(`<html>g_steamID = "${STEAM_ID}";</html>`, TOKEN);
+  const restore = withDocument(
+    '<html>Steam shell</html>',
+    TOKEN,
+    [`var g_steamID = "${STEAM_ID}";`],
+  );
   try {
     assert.deepEqual(await readCredential(), {
       pageAccessToken: TOKEN,
@@ -37,7 +48,11 @@ test('the page credential is read from the application config attribute', async 
 });
 
 test('an html-escaped token is unescaped before it is handed on', async () => {
-  const restore = withDocument(`<html>g_steamID = "${STEAM_ID}";</html>`, `&quot;${TOKEN}&quot;`);
+  const restore = withDocument(
+    '<html>Steam shell</html>',
+    `&quot;${TOKEN}&quot;`,
+    [`var g_steamID = "${STEAM_ID}";`],
+  );
   try {
     const credential = await readCredential();
     assert.equal(credential?.pageAccessToken, TOKEN);
@@ -48,13 +63,39 @@ test('an html-escaped token is unescaped before it is handed on', async () => {
 
 test('the inline bootstrap is used when the attribute is absent', async () => {
   const restore = withDocument(
-    `<html>data-loyalty_webapi_token="&quot;${TOKEN}&quot;" g_steamID = "${STEAM_ID}";</html>`,
+    '<html>Steam shell</html>',
     null,
+    [`data-loyalty_webapi_token="&quot;${TOKEN}&quot;"; g_steamID = "${STEAM_ID}";`],
   );
   try {
     const credential = await readCredential();
     assert.equal(credential?.pageAccessToken, TOKEN);
     assert.equal(credential?.pageSteamId, STEAM_ID);
+  } finally {
+    restore();
+  }
+});
+
+test('user-authored body text cannot spoof the Steam account binding', async () => {
+  const restore = withDocument(
+    `<main>g_steamID = "${OTHER_STEAM_ID}";</main>`,
+    TOKEN,
+    [`var g_steamID = "${STEAM_ID}";`],
+  );
+  try {
+    assert.equal((await readCredential())?.pageSteamId, STEAM_ID);
+  } finally {
+    restore();
+  }
+});
+
+test('conflicting Steam bootstrap account assignments fail closed', async () => {
+  const restore = withDocument('<main></main>', TOKEN, [
+    `g_steamID = "${STEAM_ID}";`,
+    `g_steamID = "${OTHER_STEAM_ID}";`,
+  ]);
+  try {
+    assert.equal(await readCredential(), null);
   } finally {
     restore();
   }
@@ -80,6 +121,60 @@ test('a blank or malformed token is refused', async () => {
       restore();
     }
   }
+});
+
+test('the worker bridge accepts only the exact Steam HTTPS origin and extension id', () => {
+  const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
+  assert.equal(isTrustedSteamPageSender({
+    id: extensionId,
+    url: 'https://steamcommunity.com/id/trader/inventory',
+    origin: 'https://steamcommunity.com',
+  }, extensionId), true);
+  for (const sender of [
+    { id: extensionId, url: 'http://steamcommunity.com/id/trader' },
+    { id: extensionId, url: 'https://evil.steamcommunity.com/id/trader' },
+    { id: extensionId, url: 'https://csfloat.com/' },
+    { id: 'another-extension', url: 'https://steamcommunity.com/' },
+  ]) {
+    assert.equal(isTrustedSteamPageSender(sender, extensionId), false);
+  }
+});
+
+test('the credential bridge contract is exact-schema and bounded', () => {
+  assert.deepEqual(normalizeSteamPageCredential({
+    pageAccessToken: TOKEN,
+    pageSteamId: STEAM_ID,
+  }), {
+    pageAccessToken: TOKEN,
+    pageSteamId: STEAM_ID,
+  });
+  assert.equal(normalizeSteamPageCredential({
+    pageAccessToken: TOKEN,
+    pageSteamId: STEAM_ID,
+    html: '<secret>',
+  }), null);
+  assert.equal(normalizeSteamPageCredential({
+    pageAccessToken: TOKEN,
+    pageSteamId: '123',
+  }), null);
+});
+
+test('the bridge is exact-origin, bounded-retry, and has no storage/log/network capability', async () => {
+  const manifest = JSON.parse(await readFile(
+    new URL('../src/manifest.json', import.meta.url),
+    'utf8',
+  )) as { content_scripts?: Array<{ matches?: string[]; js?: string[] }> };
+  const entry = manifest.content_scripts?.find((candidate) =>
+    candidate.js?.includes('src/content-scripts/steam/page-credential-bridge.ts'));
+  assert.deepEqual(entry?.matches, ['https://steamcommunity.com/*']);
+
+  const source = await readFile(
+    new URL('../src/content-scripts/steam/page-credential-bridge.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /MAX_INITIAL_ATTEMPTS = 20/);
+  assert.match(source, /CREDENTIAL_REFRESH_MS = 4 \* 60 \* 1_000/);
+  assert.doesNotMatch(source, /chrome\.storage|\bfetch\s*\(|createLogger|console\./);
 });
 
 test('a token minted for another account is refused by the read provider', async () => {

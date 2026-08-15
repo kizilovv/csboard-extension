@@ -23,6 +23,11 @@ import {
 } from '../shared/storage';
 import { createLogger } from '../shared/logger';
 import type { MarketHashName, PriceData } from '../shared/types';
+import { GatewayPayloadError } from '../shared/gateway-dto';
+import {
+  isTrustedSteamPageSender,
+  normalizeSteamPageCredential,
+} from '../shared/steam-page-credential';
 import {
   DEFAULT_POPUP_SETTINGS,
   DEFAULT_PORTFOLIO_STATUS,
@@ -121,6 +126,14 @@ async function getSteamReadProvider(
 ): Promise<SteamReadSessionProvider> {
   const pageSteamId = pageCredential?.steamId;
   const pageToken = pageCredential?.token;
+  // A credential bridge has already bound a fresh token to this exact paired
+  // account. Re-probing steamcommunity.com from the extension origin here
+  // would discard that first-party proof under third-party-cookie blocking.
+  if (!pageSteamId && !pageToken && expectedSteamId && steamReadProvider &&
+      steamReadProviderAccount === expectedSteamId &&
+      steamReadProvider.hasUsableAccessToken?.()) {
+    return steamReadProvider;
+  }
   // A page-supplied identity is first-party proof of who is signed in, so it
   // stands in for the session probe the worker cannot always make.
   const session = pageSteamId && pageToken
@@ -294,12 +307,17 @@ async function writeStoredPortfolioUiStatus(status: StoredPortfolioUiStatus): Pr
 
 function safePortfolioErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
+  if (message === 'STEAM_SESSION_REQUIRED') return 'STEAM_SESSION_REQUIRED';
   if (message === 'STEAM_ACCOUNT_MISMATCH') return 'STEAM_ACCOUNT_MISMATCH';
   if (message === 'PORTFOLIO_SYNC_NOT_ENABLED') return 'SYNC_NOT_ENABLED';
   if (message === 'DEVICE_REVOKED') return 'DEVICE_REVOKED';
   if (message === 'GATEWAY_BUILD_CONFIG_UNAVAILABLE' ||
       message === 'GATEWAY_BUILD_CONFIG_INVALID' || message === 'GATEWAY_ORIGIN_NOT_PINNED') {
     return 'GATEWAY_UNCONFIGURED';
+  }
+  if (error instanceof GatewayPayloadError &&
+      error.safeContext['reason'] === 'steam-session-unavailable') {
+    return 'STEAM_SESSION_REQUIRED';
   }
   return 'SYNC_FAILED';
 }
@@ -403,11 +421,21 @@ async function buildPortfolioPopupStatus(): Promise<PortfolioSyncStatus> {
 
 router.on('FETCH_TRADE_HISTORY', async (msg) => {
   const provider = await getSteamReadProvider();
-  const result = await provider.readRecentTrades(msg.data.maxTrades);
-  const startAfterTime = msg.data.startAfterTime ?? 0;
+  const startAfterTime = msg.data.startAfterTime;
   const startAfterTradeId = msg.data.startAfterTradeId;
-  const trades = result.trades.filter((trade) =>
-    trade.occurredAt >= startAfterTime && trade.tradeId !== startAfterTradeId);
+  const hasTimeCursor = startAfterTime !== undefined && startAfterTime !== 0;
+  const hasTradeCursor = startAfterTradeId !== undefined && startAfterTradeId !== '0';
+  if (hasTimeCursor !== hasTradeCursor) throw new Error('INVALID_TRADE_HISTORY_CURSOR');
+  const result = await provider.readRecentTrades(msg.data.maxTrades, {
+    includeTotal: true,
+    ...(hasTimeCursor && hasTradeCursor ? {
+      cursor: {
+        startAfterTime: startAfterTime as number,
+        startAfterTradeId: startAfterTradeId as string,
+      },
+    } : {}),
+  });
+  const trades = result.trades;
 
   // The provider deliberately returns identities only — that DTO is also what
   // the gateway uploads, and it must stay free of derived money fields. Pricing
@@ -451,8 +479,8 @@ router.on('FETCH_TRADE_HISTORY', async (msg) => {
   const last = trades.length > 0 ? trades[trades.length - 1] : undefined;
   return {
     trades: enriched,
-    totalTrades: enriched.length,
-    hasMore: false,
+    totalTrades: result.totalTrades ?? enriched.length,
+    hasMore: result.hasMore === true,
     ...(last ? { lastTradeId: last.tradeId, lastTradeTime: last.occurredAt } : {}),
   };
 });
@@ -1025,6 +1053,38 @@ router.on('GET_STEAM_READ_SESSION_STATUS', async () => {
   return { ready: steamReadProvider !== null };
 });
 
+router.on('OFFER_STEAM_PAGE_CREDENTIAL', async (msg, sender) => {
+  if (msg.version !== 1 ||
+      !isTrustedSteamPageSender(sender, chrome.runtime.id)) {
+    throw new Error('INVALID_STEAM_PAGE_SENDER');
+  }
+  const credential = normalizeSteamPageCredential(msg.data);
+  if (!credential) throw new Error('INVALID_STEAM_PAGE_CREDENTIAL');
+
+  const [registration, settings] = await Promise.all([
+    getGatewayDeviceKeys().getRegistration().catch((): null => null),
+    getSettings(),
+  ]);
+  // Do not retain a broad page credential when portfolio sync is not both
+  // paired and explicitly enabled. The content script receives no account or
+  // portfolio state in response.
+  if (!registration || !settings.portfolioSyncEnabled ||
+      !hasEnabledPortfolioSource(settings)) {
+    return { accepted: true as const, syncTriggered: false };
+  }
+
+  await getSteamReadProvider(registration.steamId, {
+    token: credential.pageAccessToken,
+    steamId: credential.pageSteamId,
+  });
+  const syncTriggered = await runCredentialAssistedPortfolioSync(
+    registration.pairedAt,
+    registration.steamId,
+    credential,
+  );
+  return { accepted: true as const, syncTriggered };
+});
+
 router.on('GET_TRADE_HOLD_ITEMS', async (msg) => {
   // For now, directly fetch from Steam without requiring stored token
   // The Steam community inventory endpoint uses browser cookies
@@ -1421,6 +1481,8 @@ const PORTFOLIO_AUTO_SYNC_STATE_KEY = 'csboard_portfolio_auto_sync_v1';
 const PORTFOLIO_AUTO_SYNC_BASE_BACKOFF_MS = 60 * 60 * 1_000;
 const PORTFOLIO_AUTO_SYNC_MAX_BACKOFF_MS = 6 * 60 * 60 * 1_000;
 const PORTFOLIO_AUTO_SYNC_MAX_FAILURES = 8;
+const PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY = 'csboard_portfolio_page_sync_throttle_v1';
+const PORTFOLIO_CREDENTIAL_SYNC_THROTTLE_MS = 60 * 60 * 1_000;
 
 interface StoredPortfolioAutoSyncState {
   readonly consecutiveFailures: number;
@@ -1513,6 +1575,160 @@ function runAutomaticPortfolioSync(): Promise<void> {
   });
   portfolioAutomaticSyncInFlight = tracked;
   return tracked;
+}
+
+interface StoredPortfolioCredentialSyncState {
+  readonly lastAttemptedAt: number;
+}
+
+let portfolioCredentialSyncInFlight: Promise<boolean> | null = null;
+
+async function readPortfolioCredentialSyncState(): Promise<StoredPortfolioCredentialSyncState | null> {
+  const stored = await chrome.storage.local.get(PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY);
+  const value = stored[PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const lastAttemptedAt = (value as Record<string, unknown>)['lastAttemptedAt'];
+  if (typeof lastAttemptedAt !== 'number' || !Number.isSafeInteger(lastAttemptedAt) ||
+      lastAttemptedAt <= 0 || lastAttemptedAt > Date.now() + 60_000) {
+    return null;
+  }
+  return { lastAttemptedAt };
+}
+
+/**
+ * A fresh first-party credential is a change in prerequisites, so it must
+ * bypass a stale exponential backoff (including the old 8-failure ceiling).
+ * The separate durable timestamp still enforces the disclosed hourly cadence
+ * across MV3 service-worker restarts and multiple Steam tabs.
+ */
+function runCredentialAssistedPortfolioSync(
+  pairedAt: number,
+  expectedSteamId: string,
+  credential: { readonly pageAccessToken: string; readonly pageSteamId: string },
+): Promise<boolean> {
+  if (portfolioCredentialSyncInFlight) return portfolioCredentialSyncInFlight;
+  const epoch = portfolioSyncEpoch;
+  const pending = performCredentialAssistedPortfolioSync(
+    epoch,
+    pairedAt,
+    expectedSteamId,
+    credential,
+  );
+  const tracked = pending.finally(() => {
+    if (portfolioCredentialSyncInFlight === tracked) {
+      portfolioCredentialSyncInFlight = null;
+    }
+  });
+  portfolioCredentialSyncInFlight = tracked;
+  return tracked;
+}
+
+async function performCredentialAssistedPortfolioSync(
+  epoch: number,
+  pairedAt: number,
+  expectedSteamId: string,
+  credential: { readonly pageAccessToken: string; readonly pageSteamId: string },
+): Promise<boolean> {
+  if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) return false;
+  const now = Date.now();
+  const credentialState = await readPortfolioCredentialSyncState().catch(() => null);
+  if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) return false;
+  if (credentialState && credentialState.lastAttemptedAt >= pairedAt &&
+      now - credentialState.lastAttemptedAt < PORTFOLIO_CREDENTIAL_SYNC_THROTTLE_MS) {
+    return false;
+  }
+
+  // A manual/alarm run may already be past its Steam-session probe when the
+  // first-party credential arrives. Joining that old promise and claiming the
+  // hourly slot immediately used to lose the credential: the old run rejected,
+  // cleared the provider and suppressed the only useful retry for an hour.
+  // Let the old verdict settle first. Success means the data is already fresh;
+  // only a session failure warrants one new credential-backed run.
+  const overlappingSync = portfolioSyncInFlight;
+  const overlappingAutomaticSync = portfolioAutomaticSyncInFlight;
+  if (overlappingSync) {
+    try {
+      await overlappingSync;
+      if (overlappingAutomaticSync) await overlappingAutomaticSync;
+      if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) {
+        return false;
+      }
+      await chrome.storage.local.set({
+        [PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY]: { lastAttemptedAt: Date.now() },
+      });
+      await clearPortfolioAutoSyncState().catch((error) => {
+        logger.warn('Could not clear automatic portfolio sync state after overlapping success', {
+          error: String(error),
+        });
+      });
+      return false;
+    } catch (error) {
+      if (error instanceof PortfolioSyncCancelledError || portfolioUnpairing ||
+          portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) {
+        return false;
+      }
+      if (safePortfolioErrorCode(error) !== 'STEAM_SESSION_REQUIRED') {
+        // The page credential cannot repair a gateway/network/data failure.
+        // Still consume this bridge cadence so the four-minute page refresh
+        // cannot bypass the scheduler's backoff and hammer the same failure.
+        await chrome.storage.local.set({
+          [PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY]: { lastAttemptedAt: Date.now() },
+        });
+        return false;
+      }
+
+      // The automatic wrapper persists the old failure after the shared sync
+      // promise rejects. Wait for that bookkeeping before the recovery run so
+      // it cannot recreate stale backoff after a later successful retry.
+      if (overlappingAutomaticSync) await Promise.allSettled([overlappingAutomaticSync]);
+      if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) {
+        return false;
+      }
+      // The failed old run may have forgotten the provider. Re-offer the
+      // still-memory-only credential and bind it to the paired Steam account.
+      await getSteamReadProvider(expectedSteamId, {
+        token: credential.pageAccessToken,
+        steamId: credential.pageSteamId,
+      });
+      if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) {
+        return false;
+      }
+    }
+  }
+
+  // Claim the hourly slot before any network read. This record contains only a
+  // timestamp; the Steam token and account credential remain process-memory-only.
+  await chrome.storage.local.set({
+    [PORTFOLIO_CREDENTIAL_SYNC_STATE_KEY]: { lastAttemptedAt: Date.now() },
+  });
+  if (portfolioUnpairing || portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) return false;
+
+  const previousAutoState = await readPortfolioAutoSyncState()
+    .catch(() => EMPTY_PORTFOLIO_AUTO_SYNC_STATE);
+  try {
+    // Deliberately call the shared fenced path directly instead of the alarm
+    // wrapper: a fresh credential must recover immediately from nextAttemptAt.
+    await runPortfolioSync(epoch);
+    await clearPortfolioAutoSyncState().catch((error) => {
+      logger.warn('Could not clear automatic portfolio sync state after credential recovery', {
+        error: String(error),
+      });
+    });
+  } catch (error) {
+    if (error instanceof PortfolioSyncCancelledError || portfolioUnpairing ||
+        portfolioUploadsBlocked || epoch !== portfolioSyncEpoch) {
+      return false;
+    }
+    await persistPortfolioAutoSyncFailure(previousAutoState, error).catch((storageError) => {
+      logger.warn('Could not persist credential-assisted sync backoff', {
+        error: String(storageError),
+      });
+    });
+    logger.warn('Credential-assisted portfolio sync failed', {
+      error: safePortfolioErrorCode(error),
+    });
+  }
+  return true;
 }
 
 async function performAutomaticPortfolioSync(epoch: number): Promise<void> {

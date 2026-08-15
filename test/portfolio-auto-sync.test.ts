@@ -14,7 +14,9 @@ type Listener<T> = (value: T) => unknown;
 
 const AUTO_SYNC_ALARM = 'portfolio-auto-sync';
 const AUTO_SYNC_STATE_KEY = 'csboard_portfolio_auto_sync_v1';
+const CREDENTIAL_SYNC_STATE_KEY = 'csboard_portfolio_page_sync_throttle_v1';
 const PORTFOLIO_UI_STATUS_KEY = 'csboard_portfolio_ui_status_v1';
+const PAGE_TOKEN = 'a'.repeat(48);
 
 let bundleSequence = 0;
 let workerBundle: Promise<string> | undefined;
@@ -99,15 +101,24 @@ async function bundledWorker(): Promise<string> {
         // the exact state transition used by the alarm failure path.
         footer: {
           js: [
+            'function __testSetPortfolioSyncInFlight(promise) {',
+            '  const tracked = Promise.resolve(promise).finally(() => {',
+            '    if (portfolioSyncInFlight === tracked) portfolioSyncInFlight = null;',
+            '  });',
+            '  portfolioSyncInFlight = tracked;',
+            '}',
             'export {',
             '  portfolioAutoSyncFailureState as __testPortfolioAutoSyncFailureState,',
             '  sourceStatus as __testPortfolioSourceStatus,',
             '  portfolioCollectorSources as __testPortfolioCollectorSources,',
             '  portfolioSyncSuccessStatus as __testPortfolioSyncSuccessStatus,',
+            '  safePortfolioErrorCode as __testSafePortfolioErrorCode,',
             '  beginPortfolioUnpairFence as __testBeginPortfolioUnpairFence,',
             '  finishPortfolioUnpairAttempt as __testFinishPortfolioUnpairAttempt,',
             '  allowPortfolioUploadsAfterExplicitConsent as __testAllowPortfolioUploads,',
-            '  preparePortfolioPairing as __testPreparePortfolioPairing',
+            '  preparePortfolioPairing as __testPreparePortfolioPairing,',
+            '  runCredentialAssistedPortfolioSync as __testRunCredentialAssistedPortfolioSync,',
+            '  __testSetPortfolioSyncInFlight',
             '};',
           ].join('\n'),
         },
@@ -251,10 +262,17 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
       attemptedAt: number,
       successfulAt: number,
     ) => Bag;
+    __testSafePortfolioErrorCode: (error: unknown) => string;
     __testBeginPortfolioUnpairFence: () => number;
     __testFinishPortfolioUnpairAttempt: () => void;
     __testAllowPortfolioUploads: () => void;
     __testPreparePortfolioPairing: () => Promise<void>;
+    __testRunCredentialAssistedPortfolioSync: (
+      pairedAt: number,
+      expectedSteamId: string,
+      credential: { pageAccessToken: string; pageSteamId: string },
+    ) => Promise<boolean>;
+    __testSetPortfolioSyncInFlight: (promise: Promise<unknown>) => void;
   };
 
   return {
@@ -270,12 +288,42 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
       assert.equal(onStartup.listeners.length, 1);
       await onStartup.listeners[0]!(undefined);
     },
+    async fireInternalMessage(message: Bag, sender: Bag): Promise<Bag> {
+      assert.equal(onMessage.listeners.length, 1);
+      const listener = onMessage.listeners[0] as unknown as (
+        value: Bag,
+        sender: Bag,
+        sendResponse: (response: Bag) => void,
+      ) => unknown;
+      return new Promise((resolveResponse, rejectResponse) => {
+        const timeout = setTimeout(
+          () => rejectResponse(new Error('internal message timed out')),
+          5_000,
+        );
+        listener(message, sender, (response) => {
+          clearTimeout(timeout);
+          resolveResponse(response);
+        });
+      });
+    },
   };
 }
 
 test('portfolio automatic sync remains opt-in by default', () => {
   assert.equal(DEFAULT_POPUP_SETTINGS.portfolioSyncEnabled, false);
   assert.equal(Object.values(DEFAULT_POPUP_SETTINGS.portfolioSources).some(Boolean), false);
+});
+
+test('missing Steam cookies have a stable safe status code', async () => {
+  const { workerModule } = await loadWorker();
+  assert.equal(
+    workerModule.__testSafePortfolioErrorCode(new Error('STEAM_SESSION_REQUIRED')),
+    'STEAM_SESSION_REQUIRED',
+  );
+  assert.equal(
+    workerModule.__testSafePortfolioErrorCode(new Error('a secret-looking arbitrary failure')),
+    'SYNC_FAILED',
+  );
 });
 
 test('trade history consent enables privacy-safe offer enrichment without exposing a source row', async () => {
@@ -570,6 +618,170 @@ test('automatic retries use increasing bounded delays instead of creating an ala
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('a fresh exact-origin page credential bypasses an eight-failure backoff immediately', async () => {
+  const originalNow = Date.now;
+  const now = 2_000_000_000_000;
+  Date.now = () => now;
+  try {
+    const harness = await loadWorker({
+      paired: true,
+      settings: {
+        portfolioSyncEnabled: true,
+        portfolioSources: { inventory: true, tradeHistory: true },
+      },
+      autoSyncState: {
+        consecutiveFailures: 8,
+        nextAttemptAt: now + 6 * 60 * 60 * 1_000,
+        suspended: false,
+      },
+    });
+
+    const response = await harness.fireInternalMessage({
+      type: 'OFFER_STEAM_PAGE_CREDENTIAL',
+      version: 1,
+      data: {
+        pageAccessToken: PAGE_TOKEN,
+        pageSteamId: '76561198000000000',
+      },
+    }, {
+      id: 'auto-sync-test',
+      url: 'https://steamcommunity.com/id/trader/inventory',
+      origin: 'https://steamcommunity.com',
+    });
+
+    assert.deepEqual(response, { accepted: true, syncTriggered: true });
+    assert.deepEqual(harness.local[CREDENTIAL_SYNC_STATE_KEY], { lastAttemptedAt: now });
+    assert.ok(PORTFOLIO_UI_STATUS_KEY in harness.local, 'credential did not start a sync');
+    const autoState = harness.local[AUTO_SYNC_STATE_KEY] as Bag;
+    assert.equal(autoState.consecutiveFailures, 8, 'bounded failure count changed shape');
+    assert.ok((autoState.nextAttemptAt as number) > now);
+    assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+    assert.equal(JSON.stringify(harness.writes).includes(PAGE_TOKEN), false);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('a stale in-flight session failure cannot consume a fresh credential or its throttle', async () => {
+  const originalNow = Date.now;
+  const now = 2_000_000_000_000;
+  Date.now = () => now;
+  try {
+    const harness = await loadWorker({
+      paired: true,
+      settings: {
+        portfolioSyncEnabled: true,
+        portfolioSources: { inventory: true, tradeHistory: true },
+      },
+      autoSyncState: {
+        consecutiveFailures: 8,
+        nextAttemptAt: now + 6 * 60 * 60 * 1_000,
+        suspended: false,
+      },
+    });
+    let rejectOldSync: ((reason: unknown) => void) | undefined;
+    const oldSync = new Promise<void>((_resolve, reject) => {
+      rejectOldSync = reject;
+    });
+    harness.workerModule.__testSetPortfolioSyncInFlight(oldSync);
+
+    const recovery = harness.workerModule.__testRunCredentialAssistedPortfolioSync(
+      1,
+      '76561198000000000',
+      {
+        pageAccessToken: PAGE_TOKEN,
+        pageSteamId: '76561198000000000',
+      },
+    );
+    // The fresh credential waits for the stale verdict without occupying the
+    // durable hourly slot. Otherwise the only useful retry is suppressed.
+    await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+    assert.equal(CREDENTIAL_SYNC_STATE_KEY in harness.local, false);
+
+    rejectOldSync!(new Error('STEAM_SESSION_REQUIRED'));
+    assert.equal(await recovery, true, 'the credential-backed one-shot was not started');
+    assert.deepEqual(harness.local[CREDENTIAL_SYNC_STATE_KEY], { lastAttemptedAt: now });
+    assert.ok(PORTFOLIO_UI_STATUS_KEY in harness.local, 'recovery did not start a fresh sync');
+    assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+    assert.equal(JSON.stringify(harness.writes).includes(PAGE_TOKEN), false);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('an unrelated in-flight failure keeps the hourly credential throttle intact', async () => {
+  const originalNow = Date.now;
+  const now = 2_000_000_000_000;
+  Date.now = () => now;
+  try {
+    const harness = await loadWorker({
+      paired: true,
+      settings: {
+        portfolioSyncEnabled: true,
+        portfolioSources: { inventory: true },
+      },
+    });
+    let rejectOldSync: ((reason: unknown) => void) | undefined;
+    harness.workerModule.__testSetPortfolioSyncInFlight(new Promise<void>((_resolve, reject) => {
+      rejectOldSync = reject;
+    }));
+
+    const firstOffer = harness.workerModule.__testRunCredentialAssistedPortfolioSync(
+      1,
+      '76561198000000000',
+      {
+        pageAccessToken: PAGE_TOKEN,
+        pageSteamId: '76561198000000000',
+      },
+    );
+    await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+    assert.equal(CREDENTIAL_SYNC_STATE_KEY in harness.local, false);
+    rejectOldSync!(new Error('gateway unavailable'));
+    assert.equal(await firstOffer, false);
+    assert.deepEqual(harness.local[CREDENTIAL_SYNC_STATE_KEY], { lastAttemptedAt: now });
+
+    const secondOffer = await harness.workerModule.__testRunCredentialAssistedPortfolioSync(
+      1,
+      '76561198000000000',
+      {
+        pageAccessToken: PAGE_TOKEN,
+        pageSteamId: '76561198000000000',
+      },
+    );
+    assert.equal(secondOffer, false, 'the next page refresh bypassed the hourly throttle');
+    assert.equal(PORTFOLIO_UI_STATUS_KEY in harness.local, false);
+    assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+    assert.equal(JSON.stringify(harness.writes).includes(PAGE_TOKEN), false);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('page credential messages from non-Steam senders are rejected before storage writes', async () => {
+  const harness = await loadWorker({
+    paired: true,
+    settings: {
+      portfolioSyncEnabled: true,
+      portfolioSources: { inventory: true },
+    },
+  });
+  const response = await harness.fireInternalMessage({
+    type: 'OFFER_STEAM_PAGE_CREDENTIAL',
+    version: 1,
+    data: {
+      pageAccessToken: PAGE_TOKEN,
+      pageSteamId: '76561198000000000',
+    },
+  }, {
+    id: 'auto-sync-test',
+    url: 'https://evil.steamcommunity.com/',
+    origin: 'https://evil.steamcommunity.com',
+  });
+
+  assert.deepEqual(response, { error: 'INVALID_STEAM_PAGE_SENDER' });
+  assert.equal(CREDENTIAL_SYNC_STATE_KEY in harness.local, false);
 });
 
 test('device revocation suspends automatic retries until pairing state is reset', async () => {

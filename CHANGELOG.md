@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.4 — Store release candidate
+
+- Restored hourly portfolio sync in browsers that block third-party Steam
+  cookies. Signed-in Steam pages now offer a short-lived credential directly to
+  the extension worker; it is exact-origin checked, bound to the paired Steam
+  account, kept only in memory, and never logged, stored or uploaded.
+- A newly available Steam credential immediately recovers a sync stuck at the
+  retry ceiling while a persisted throttle keeps automatic reads at no more
+  than once per hour.
+- Fixed local Trade History pagination to send Steam's real time/trade cursor,
+  honor the API `more` marker and report `total_trades` when available.
+
 ## 1.1.0 — local release candidate
 
 - Added one canonical asset-aware CSFloat lookup across Steam and CSFloat

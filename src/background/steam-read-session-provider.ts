@@ -27,6 +27,8 @@ export interface SteamInventoryReadResult {
 export interface SteamTradesReadResult {
   readonly complete: true;
   readonly trades: readonly PortfolioTradeDto[];
+  readonly hasMore?: boolean;
+  readonly totalTrades?: number;
   /**
    * Icon per `classId:instanceId`, kept OUTSIDE the trade DTO on purpose: that
    * DTO is what the gateway uploads and the server validates strictly, so an
@@ -36,6 +38,16 @@ export interface SteamTradesReadResult {
   readonly icons: Readonly<Record<string, string>>;
   /** Steam rarity colour per `classId:instanceId`, same reasoning as icons. */
   readonly nameColors: Readonly<Record<string, string>>;
+}
+
+export interface SteamTradeHistoryCursor {
+  readonly startAfterTime: number;
+  readonly startAfterTradeId: string;
+}
+
+export interface SteamTradesReadOptions {
+  readonly cursor?: SteamTradeHistoryCursor;
+  readonly includeTotal?: boolean;
 }
 
 export interface SteamOffersReadResult {
@@ -106,7 +118,10 @@ export const STEAM_OFFERS_TRUNCATED_WARNING = 'TRADE_OFFERS_TRUNCATED' as const;
 /** Fixed read-only surface. There is intentionally no generic fetch/token method. */
 export interface SteamReadSessionProvider {
   readInventoryContext(contextId: SteamInventoryContextId): Promise<SteamInventoryReadResult>;
-  readRecentTrades(maxTrades?: number): Promise<SteamTradesReadResult>;
+  readRecentTrades(
+    maxTrades?: number,
+    options?: SteamTradesReadOptions,
+  ): Promise<SteamTradesReadResult>;
   readTradeOffers(): Promise<SteamOffersReadResult>;
   readTradeOffersForDisplay(
     options?: SteamOffersDisplayReadOptions,
@@ -127,6 +142,8 @@ export interface SteamReadSessionProvider {
    * accepted only for the Steam account the provider was created for.
    */
   offerAccessToken(token: string, tokenSteamId: string): void;
+  /** Safe boolean only; the token itself never crosses this boundary. */
+  hasUsableAccessToken?(): boolean;
   forgetSession(): void;
 }
 
@@ -444,6 +461,11 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     this.memoryToken = { value: normalized, mintedAt: this.now() };
   }
 
+  hasUsableAccessToken(): boolean {
+    return this.memoryToken !== null &&
+      this.now() - this.memoryToken.mintedAt < TOKEN_MEMORY_TTL_MS;
+  }
+
   forgetSession(): void {
     this.memoryToken = null;
   }
@@ -623,15 +645,32 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { reason: 'inventory-pagination-limit' });
   }
 
-  async readRecentTrades(maxTrades = 100): Promise<SteamTradesReadResult> {
+  async readRecentTrades(
+    maxTrades = 100,
+    options: SteamTradesReadOptions = {},
+  ): Promise<SteamTradesReadResult> {
     if (!Number.isSafeInteger(maxTrades) || maxTrades < 1 || maxTrades > 100) {
       throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.maxTrades' });
+    }
+    const cursor = options.cursor;
+    if (cursor && (
+      !Number.isSafeInteger(cursor.startAfterTime) || cursor.startAfterTime <= 0 ||
+      cursor.startAfterTime > 0xffff_ffff ||
+      !/^[0-9]{1,20}$/.test(cursor.startAfterTradeId)
+    )) {
+      throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.tradeHistoryCursor' });
     }
     const response = await this.fetchSteamApi('GetTradeHistory', {
       max_trades: String(maxTrades),
       get_descriptions: 'true',
-      include_total: 'false',
+      include_failed: 'false',
+      include_total: options.includeTotal ? 'true' : 'false',
       language: 'english',
+      navigating_back: 'false',
+      ...(cursor ? {
+        start_after_time: String(cursor.startAfterTime),
+        start_after_tradeid: cursor.startAfterTradeId,
+      } : {}),
     });
     const descriptions = buildDescriptionMap(asArray(response['descriptions']));
     const trades = asArray(response['trades']).map((entry, index): PortfolioTradeDto => {
@@ -682,7 +721,16 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     // Steam can hand back more rows than `max_trades`, and the DTO caps the run
     // at the same number — one extra row failed the whole sync with a
     // record-limit rejection. Offers were already sliced here; trades were not.
-    return { complete: true, trades: trades.slice(0, maxTrades), icons, nameColors };
+    const totalTrades = optionalInteger(response['total_trades']);
+    const hasMore = response['more'] === true || Number(response['more']) === 1;
+    return {
+      complete: true,
+      trades: trades.slice(0, maxTrades),
+      icons,
+      nameColors,
+      hasMore,
+      ...(totalTrades !== undefined ? { totalTrades } : {}),
+    };
   }
 
   async readTradeOffers(): Promise<SteamOffersReadResult> {

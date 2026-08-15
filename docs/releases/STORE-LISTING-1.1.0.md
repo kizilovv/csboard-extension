@@ -97,7 +97,11 @@ hour. The same consent and source checks protect manual and automatic sync.
 
 Runs the disclosed UI on Steam inventory, market, trade, history and profile
 pages; reads normalized CS2 item facts; and submits only user-confirmed Steam
-actions directly to Steam.
+actions directly to Steam. On the exact HTTPS Steam Community origin, the
+extension may offer Steam's short-lived page credential directly to its own
+worker so an opted-in hourly portfolio sync still works when third-party
+cookies are blocked. The credential is account-bound, memory-only, never logged
+or locally persisted, and never uploaded.
 
 ### `api.steampowered.com`
 

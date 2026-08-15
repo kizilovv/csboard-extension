@@ -74,6 +74,16 @@ if (!buffResources ||
   fail('Buff page-world resource scope is not exact');
 }
 
+const steamCredentialContent = (manifest.content_scripts || []).find((entry) =>
+  Array.isArray(entry.js) && entry.js.includes('content/page-credential-bridge.js'));
+if (!steamCredentialContent ||
+    JSON.stringify(steamCredentialContent.matches) !==
+      JSON.stringify(['https://steamcommunity.com/*']) ||
+    steamCredentialContent.run_at !== 'document_idle' ||
+    (steamCredentialContent.css || []).length !== 0) {
+  fail('Steam credential bridge scope must remain exact HTTPS/document_idle with no stylesheet');
+}
+
 const sourceFiles = walk(resolve(root, 'src')).filter((file) => /\.(?:ts|js|json|html)$/.test(file));
 for (const file of sourceFiles) {
   const rel = relative(root, file);
@@ -156,6 +166,27 @@ if (!serviceWorker.includes('GET_EXTENSION_STATUS') ||
     !serviceWorker.includes('PAIR_AND_ENABLE_PORTFOLIO_SYNC') ||
     !serviceWorker.includes('REACTIVATE_PORTFOLIO_SYNC')) {
   fail('reviewed bounded external protocol is missing from the packaged service worker');
+}
+
+const steamCredentialBridge = readFileSync(
+  resolve(root, 'build/content/page-credential-bridge.js'),
+  'utf8',
+);
+if (!steamCredentialBridge.includes('OFFER_STEAM_PAGE_CREDENTIAL')) {
+  fail('Steam credential bridge message is missing from the packaged content script');
+}
+for (const forbiddenCapability of [
+  'chrome.storage',
+  'localStorage',
+  'sessionStorage',
+  'indexedDB',
+  'fetch(',
+  'XMLHttpRequest',
+  'sendBeacon',
+]) {
+  if (steamCredentialBridge.includes(forbiddenCapability)) {
+    fail(`Steam credential bridge includes forbidden capability: ${forbiddenCapability}`);
+  }
 }
 
 const buffInterceptor = readFileSync(

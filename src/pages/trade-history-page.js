@@ -37,8 +37,8 @@ async function fetchTrades(maxTrades = 50) {
       const last = result.trades[result.trades.length - 1];
       lastTradeId = last.tradeId || lastTradeId;
       lastTradeTime = last.occurredAt || lastTradeTime;
-      hasMore = result.hasMore;
     }
+    hasMore = result.hasMore === true;
 
     document.getElementById('summary').textContent = `Total in Steam: ${result.totalTrades || '?'}`;
   } catch (err) {

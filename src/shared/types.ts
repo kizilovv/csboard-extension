@@ -301,10 +301,17 @@ export type ExtensionMessage =
         syncFromCsboardNow?: boolean;
       };
     }
-  // Fixed Steam read-session operations. Credentials never cross message boundaries.
+  // Fixed Steam read-session operations. The page credential crosses only the
+  // exact-origin internal content-script boundary and is never stored, logged,
+  // returned, or exposed through onMessageExternal.
   | { type: 'GET_STEAM_READ_SESSION_STATUS' }
   | { type: 'GET_TRADE_HOLD_ITEMS'; data: { steamId: SteamId64 } }
   | { type: 'CLEAR_STEAM_READ_SESSION' }
+  | {
+      type: 'OFFER_STEAM_PAGE_CREDENTIAL';
+      version: 1;
+      data: { pageAccessToken: string; pageSteamId: string };
+    }
   // Steam Trade Offers (IEconService — cs2trader approach)
   // `pageAccessToken`/`pageSteamId` come from the content script's own DOM
   // (`#application_config`). The service worker cannot always mint one itself:
@@ -354,6 +361,7 @@ export type MessageResponseMap = {
   GET_STEAM_READ_SESSION_STATUS: { ready: boolean };
   GET_TRADE_HOLD_ITEMS: TradeHoldStatus;
   CLEAR_STEAM_READ_SESSION: { success: true };
+  OFFER_STEAM_PAGE_CREDENTIAL: { accepted: true; syncTriggered: boolean };
   FETCH_STEAM_TRADE_OFFERS: { offers: { trade_offers_received: unknown[]; trade_offers_sent: unknown[] }; items: unknown[] };
   FETCH_TRADE_HISTORY: { trades: unknown[]; totalTrades: number; hasMore: boolean; lastTradeId?: string; lastTradeTime?: number };
   OPEN_TRADE_HISTORY: { ok: true };

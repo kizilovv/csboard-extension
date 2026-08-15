@@ -149,6 +149,48 @@ test('Steam trade facts retain the trusted icon needed for exact phase identity'
   });
 });
 
+test('Steam trade history sends the real cursor and exposes pagination metadata', async () => {
+  let apiUrl = '';
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    apiUrl = String(input);
+    return new Response(JSON.stringify({
+      response: {
+        more: 1,
+        total_trades: 114,
+        descriptions: [],
+        trades: [{
+          tradeid: '3003',
+          steamid_other: '76561198000000001',
+          time_init: 1_699_999_999,
+          assets_given: [],
+          assets_received: [],
+        }],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const provider = createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl });
+  provider.offerAccessToken('a'.repeat(40), STEAM_ID);
+
+  const result = await provider.readRecentTrades(50, {
+    cursor: {
+      startAfterTime: 1_700_000_000,
+      startAfterTradeId: '3004',
+    },
+    includeTotal: true,
+  });
+
+  const query = new URL(apiUrl).searchParams;
+  assert.equal(query.get('max_trades'), '50');
+  assert.equal(query.get('start_after_time'), '1700000000');
+  assert.equal(query.get('start_after_tradeid'), '3004');
+  assert.equal(query.get('navigating_back'), 'false');
+  assert.equal(query.get('include_failed'), 'false');
+  assert.equal(query.get('include_total'), 'true');
+  assert.equal(result.hasMore, true);
+  assert.equal(result.totalTrades, 114);
+  assert.equal(result.trades[0]?.tradeId, '3003');
+});
+
 test('accepted Steam offers use post-trade ids only for received items', async () => {
   const offer = {
     ...rawOffer(30, 1_700_000_030),

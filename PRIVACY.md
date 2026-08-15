@@ -1,6 +1,6 @@
 # CSBOARD Extension — Privacy Policy
 
-**Last updated:** August 10, 2026
+**Last updated:** August 15, 2026
 **Effective for:** CSBOARD browser extension version 1.1.0 and later
 
 This document describes the browser extension. The CSBOARD website is governed by its [separate privacy policy](https://csboard.com/en/privacy).
@@ -21,7 +21,7 @@ Content scripts run only on declared Steam Community, CSFloat and Buff163 URL pa
 
 The extension also reads the user's CSBOARD settings when “Follow CSBOARD settings” is enabled. CSBOARD authentication uses the site's normal cookie directly with the CSBOARD origin; that cookie is never copied into extension storage or a portfolio payload.
 
-Steam authenticated read credentials are held only in private memory or `chrome.storage.session` by a fixed-operation provider. They are cleared on browser-session end, unpair, account mismatch and authentication failure. No raw Steam credential is returned to a popup/content script, persisted in `chrome.storage.local`, logged or sent to CSBOARD. For recently accepted offers, the provider may inspect the offer note in memory only to derive an allowlisted `buff163` or `csfloat` marketplace hint; it discards the raw note before returning normalized portfolio data.
+Steam authenticated read credentials are held only in private memory or `chrome.storage.session` by a fixed-operation provider. On an exact `https://steamcommunity.com` page, a small content script may read the short-lived token already present in Steam's application config and offer it directly to the extension worker. The worker validates the exact HTTPS origin, extension identity and paired Steam account; the token is used only in memory and the resulting automatic sync remains throttled to at most once per hour. Credentials are cleared on browser-session end, unpair, account mismatch and authentication failure. No raw Steam credential is returned to a popup, persisted in `chrome.storage.local`, logged or sent to CSBOARD. For recently accepted offers, the provider may inspect the offer note in memory only to derive an allowlisted `buff163` or `csfloat` marketplace hint; it discards the raw note before returning normalized portfolio data.
 
 ## Optional portfolio synchronization
 
