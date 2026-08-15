@@ -53,7 +53,7 @@ function dispatch(listener, message, url, id) {
   });
 }
 
-test('real bundled service worker exposes only bounded status externally', async () => {
+test('real bundled service worker exposes only reviewed bounded external messages', async () => {
   const root = resolve(import.meta.dirname, '..');
   const manifest = JSON.parse(await readFile(resolve(root, 'build/manifest.json'), 'utf8'));
   const { chrome, listeners, effects } = createChromeMock(manifest);
@@ -65,6 +65,11 @@ test('real bundled service worker exposes only bounded status externally', async
 
   await import(`${pathToFileURL(resolve(root, 'build/service-worker.js')).href}?artifact=${Date.now()}`);
   assert.equal(typeof listeners.external, 'function', 'onMessageExternal listener missing');
+  assert.deepEqual(manifest.externally_connectable?.matches, [
+    'https://csboard.com/*',
+    'https://csboard.trade/*',
+    'https://csfolder.com/*',
+  ]);
 
   const valid = await dispatch(listeners.external, {
     version: 1,
@@ -115,6 +120,41 @@ test('real bundled service worker exposes only bounded status externally', async
   }, 'https://steamcommunity.com/id/example');
   assert.equal(wrongOrigin?.ok, false);
   assert.equal(wrongOrigin?.error?.code, 'UNAUTHORIZED_ORIGIN');
+
+  const csboardCannotPair = await dispatch(listeners.external, {
+    version: 1,
+    type: 'PAIR_AND_ENABLE_PORTFOLIO_SYNC',
+    requestId: 'wrong_pair_origin',
+    code: 'CSF-2345-6789-ABCD-EFGH',
+  }, 'https://csboard.com/extension');
+  assert.equal(csboardCannotPair?.ok, false);
+  assert.equal(csboardCannotPair?.error?.code, 'UNAUTHORIZED_ORIGIN');
+
+  const malformedCsfolderPair = await dispatch(listeners.external, {
+    version: 1,
+    type: 'PAIR_AND_ENABLE_PORTFOLIO_SYNC',
+    requestId: 'malformed_pair',
+    code: 'CSF-INVALID',
+  }, 'https://csfolder.com/portfolio');
+  assert.equal(malformedCsfolderPair?.ok, false);
+  assert.equal(malformedCsfolderPair?.error?.code, 'INVALID_MESSAGE');
+
+  const csboardCannotReactivate = await dispatch(listeners.external, {
+    version: 1,
+    type: 'REACTIVATE_PORTFOLIO_SYNC',
+    requestId: 'wrong_reactivate_origin',
+  }, 'https://csboard.com/extension');
+  assert.equal(csboardCannotReactivate?.ok, false);
+  assert.equal(csboardCannotReactivate?.error?.code, 'UNAUTHORIZED_ORIGIN');
+
+  const callerCannotChooseSources = await dispatch(listeners.external, {
+    version: 1,
+    type: 'REACTIVATE_PORTFOLIO_SYNC',
+    requestId: 'reactivate_with_sources',
+    sources: ['inventory'],
+  }, 'https://csfolder.com/portfolio');
+  assert.equal(callerCannotChooseSources?.ok, false);
+  assert.equal(callerCannotChooseSources?.error?.code, 'INVALID_MESSAGE');
 
   assert.equal(typeof listeners.internal, 'function', 'onMessage listener missing');
   const internalNonPopup = await dispatch(listeners.internal, {

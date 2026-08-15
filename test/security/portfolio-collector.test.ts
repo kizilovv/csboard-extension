@@ -128,6 +128,14 @@ test('portfolio asset identity permits the same asset ID in contexts 2 and 16 on
   assert.throws(
     () => assertPortfolioSnapshot({
       ...compositeSnapshot,
+      offers: [{ ...offer, state: 2 }],
+    }),
+    /INVALID_PAYLOAD/,
+    'the wire DTO must reject non-accepted offers even if another producer skips collector filtering',
+  );
+  assert.throws(
+    () => assertPortfolioSnapshot({
+      ...compositeSnapshot,
       inventoryItems: [item('1001', '2'), item('1001', '2')],
     }),
     (error) => error instanceof GatewayPayloadError &&
@@ -221,7 +229,11 @@ test('metadata-rich 5,000-item provider snapshot fits the official 64-chunk cont
   const first = collected.snapshot.inventoryItems[0];
   assert.ok(first);
   assert.equal(first.name, undefined);
-  assert.equal(first.iconUrl, undefined);
+  assert.equal(
+    first.iconUrl,
+    `https://community.cloudflare.steamstatic.com/economy/image/${'a'.repeat(96)}/360fx360f`,
+    'exact Steam icon identity must survive minimization for phase resolution',
+  );
   assert.equal(first.marketHashName.startsWith('StatTrak™ AK-47'), true);
   assert.equal(first.stickers?.length, 5);
   assert.equal(first.paintIndex, 675);

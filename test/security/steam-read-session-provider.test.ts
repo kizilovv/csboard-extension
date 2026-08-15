@@ -110,6 +110,45 @@ test('Steam trade history uses post-trade ids only for received items', async ()
   });
 });
 
+test('Steam trade facts retain the trusted icon needed for exact phase identity', async () => {
+  const iconPath = `phaseEvidence_${'a'.repeat(80)}/96fx96f`;
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('https://steamcommunity.com/')) return tokenPage(url);
+    return new Response(JSON.stringify({
+      response: {
+        descriptions: [{
+          classid: '100',
+          instanceid: '0',
+          market_hash_name: '★ Karambit | Doppler (Factory New)',
+          icon_url: iconPath,
+        }],
+        trades: [{
+          tradeid: '3002',
+          steamid_other: '76561198000000001',
+          time_init: 1_700_000_002,
+          assets_given: [rawTradeItem('102', '2')],
+          assets_received: [],
+        }],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const result = await createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl })
+    .readRecentTrades();
+
+  assert.deepEqual(result.trades[0]?.itemsGiven[0], {
+    appId: '730',
+    contextId: '2',
+    assetId: '102',
+    classId: '100',
+    instanceId: '0',
+    amount: '1',
+    marketHashName: '★ Karambit | Doppler (Factory New)',
+    iconUrl: `https://community.cloudflare.steamstatic.com/economy/image/${iconPath}`,
+  });
+});
+
 test('accepted Steam offers use post-trade ids only for received items', async () => {
   const offer = {
     ...rawOffer(30, 1_700_000_030),

@@ -25,9 +25,17 @@ if (manifest.version !== pkg.version) fail(`manifest/package version mismatch: $
 if (manifest.action?.default_popup !== 'popup/popup.html') fail('built manifest does not expose the packaged popup');
 
 const externalOrigins = manifest.externally_connectable?.matches || [];
-const exactExternal = ['https://csboard.com/*', 'https://csboard.trade/*'];
+const exactExternal = [
+  'https://csboard.com/*',
+  'https://csboard.trade/*',
+  'https://csfolder.com/*',
+];
 if (JSON.stringify(externalOrigins) !== JSON.stringify(exactExternal)) {
-  fail(`externally_connectable must be exact CSBOARD origins, got ${JSON.stringify(externalOrigins)}`);
+  fail(`externally_connectable must be the reviewed exact origins, got ${JSON.stringify(externalOrigins)}`);
+}
+if ((manifest.host_permissions || []).some((value) =>
+  typeof value === 'string' && value.includes('csfolder.com'))) {
+  fail('CSFolder external messaging must not grant CSFolder host access');
 }
 
 const forbiddenPermissions = new Set([
@@ -144,8 +152,10 @@ const allowedTokenMigrationOccurrences = (serviceWorker.match(/csboard_steam_acc
 if (allowedTokenMigrationOccurrences > 2) {
   fail(`legacy Steam access-token storage key appears outside one-way migration (${allowedTokenMigrationOccurrences} occurrences)`);
 }
-if (!serviceWorker.includes('GET_EXTENSION_STATUS')) {
-  fail('status-only external protocol is missing from the packaged service worker');
+if (!serviceWorker.includes('GET_EXTENSION_STATUS') ||
+    !serviceWorker.includes('PAIR_AND_ENABLE_PORTFOLIO_SYNC') ||
+    !serviceWorker.includes('REACTIVATE_PORTFOLIO_SYNC')) {
+  fail('reviewed bounded external protocol is missing from the packaged service worker');
 }
 
 const buffInterceptor = readFileSync(

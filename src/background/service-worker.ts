@@ -645,25 +645,35 @@ router.on('GET_PORTFOLIO_SYNC_STATUS', async (msg, sender) => {
 router.on('PAIR_DEVICE', (msg, sender) => {
   requirePopupSender(sender);
   if (msg.version !== 1) return Promise.reject(new Error('UNSUPPORTED_PORTFOLIO_VERSION'));
+  return pairPortfolioDevice(msg.data.code);
+});
+
+function pairPortfolioDevice(code: string) {
   if (portfolioUnpairing) return Promise.reject(new Error('UNPAIR_IN_PROGRESS'));
   if (portfolioPairingInFlight) return Promise.reject(new Error('PAIR_IN_PROGRESS'));
   const epoch = portfolioSyncEpoch;
-  const pending = performPortfolioPairing(msg.data.code, epoch);
+  const pending = performPortfolioPairing(code, epoch);
   const tracked = pending.finally(() => {
     if (portfolioPairingInFlight === tracked) portfolioPairingInFlight = null;
   });
   portfolioPairingInFlight = tracked;
   return tracked;
-});
+}
 
 async function performPortfolioPairing(code: string, epoch: number) {
+  assertPortfolioPairingEpoch(epoch);
+  const controller = await getGatewayController();
+  assertPortfolioPairingEpoch(epoch);
+  // A repeated CSFolder page message must never disable an already-paired
+  // installation. Check before preparePortfolioPairing() clears local consent.
+  if ((await controller.status()).paired) throw new Error('ALREADY_PAIRED');
   assertPortfolioPairingEpoch(epoch);
   // Pairing authorizes a device, not portfolio uploads. Persist a clean,
   // disabled baseline before creating a registration so stale settings from a
   // failed unpair can never become consent after an MV3 worker restart.
   await preparePortfolioPairing();
   assertPortfolioPairingEpoch(epoch);
-  await (await getGatewayController()).pair(code);
+  await controller.pair(code);
   assertPortfolioPairingEpoch(epoch);
   const pairedEpoch = portfolioSyncEpoch;
   assertPortfolioPairingEpoch(pairedEpoch);
@@ -709,6 +719,7 @@ function finishPortfolioUnpairAttempt(): void {
 }
 
 function allowPortfolioUploadsAfterExplicitConsent(): void {
+  if (!portfolioUploadsBlocked) return;
   portfolioUploadsBlocked = false;
   portfolioSyncEpoch += 1;
 }
@@ -1113,10 +1124,76 @@ router.on('FETCH_STEAM_TRADE_OFFERS', async (msg) => {
 router.listen();
 
 // The complete externally-connectable surface is one static, read-only status
-// probe. It is deliberately separated from the internal typed router above.
+// probe for CSBOARD plus bounded CSFolder fresh-pair and paired-reactivation
+// actions. No
+// external caller can unpair, run arbitrary syncs, change sources or reach a
+// Steam credential-bearing provider.
 registerExternalStatusRouter({
-  allowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
+  statusAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
+  pairingAllowedOrigins: ['https://csfolder.com'],
   extensionVersion: chrome.runtime.getManifest().version,
+  handlers: {
+    async isPaired() {
+      if (portfolioUnpairing) return false;
+      const controller = await getGatewayController();
+      if (portfolioUnpairing) return false;
+      return (await controller.status()).paired;
+    },
+    async pair(code) {
+      await pairPortfolioDevice(code);
+    },
+    async enablePortfolioSync() {
+      if (portfolioUnpairing) throw new Error('UNPAIR_IN_PROGRESS');
+      // Clear scheduler residue before consent becomes true, so there is no
+      // interval in which an old alarm can observe a partially activated state.
+      await clearPortfolioAutoSyncState();
+      await updateSettings({
+        portfolioSyncEnabled: true,
+        portfolioSources: {
+          inventory: true,
+          tradeOffers: false,
+          tradeHistory: true,
+          marketHistory: false,
+        },
+      });
+      allowPortfolioUploadsAfterExplicitConsent();
+    },
+    async syncNow() {
+      const epoch = portfolioSyncEpoch;
+      // The external response means "triggered", not "all Steam reads have
+      // completed". Keep the CSFolder click bounded while the existing fenced
+      // sync path records success/failure and the hourly retry path remains in
+      // charge of transient Steam/network failures.
+      void runPortfolioSync(epoch).catch((error) => {
+        if (!(error instanceof PortfolioSyncCancelledError)) {
+          logger.warn('Initial CSFolder portfolio sync did not complete', {
+            error: safePortfolioErrorCode(error),
+          });
+        }
+      });
+    },
+    async disablePortfolioSync() {
+      // Raise the process fence before storage I/O. If persisting the disabled
+      // state fails, destroy the local pairing so an MV3 restart still cannot
+      // resume uploads from stale enabled settings.
+      portfolioUploadsBlocked = true;
+      portfolioSyncEpoch += 1;
+      try {
+        await updateSettings({
+          portfolioSyncEnabled: false,
+          portfolioSources: { ...DEFAULT_POPUP_SETTINGS.portfolioSources },
+        });
+        await clearPortfolioAutoSyncState();
+      } catch (error) {
+        try {
+          await (await getGatewayController()).unpair();
+        } finally {
+          await clearLocalPortfolioPairingArtifacts().catch(() => undefined);
+        }
+        throw error;
+      }
+    },
+  },
 });
 
 // ============================================================

@@ -97,20 +97,17 @@ export interface CollectedPortfolioSync {
 }
 
 /**
- * Drops presentation-only duplicates before encryption/chunking. The canonical
- * market name and every ownership, eligibility, wear, paint and sticker fact
- * used by portfolio reconciliation/P2P remain in the payload. Steam `name` is
- * redundant with `marketHashName`; images are resolved by first-party catalog
- * data instead of repeating a long CDN URL for every owned asset.
+ * Drops presentation-only duplicates before encryption/chunking. Steam `name`
+ * is redundant with `marketHashName`. The trusted Steam icon is deliberately
+ * retained: unlike a decorative catalog image, its exact hash distinguishes
+ * Doppler/Gamma phase twins that share one marketHashName.
  */
 export function minimizeInventoryItemForGateway(item: PortfolioItemDto): PortfolioItemDto {
   const {
     name: redundantDisplayName,
-    iconUrl: redundantIconUrl,
     ...portfolioAndP2pFacts
   } = item;
   void redundantDisplayName;
-  void redundantIconUrl;
   return portfolioAndP2pFacts;
 }
 

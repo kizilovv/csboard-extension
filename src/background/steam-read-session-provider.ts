@@ -47,10 +47,11 @@ export interface SteamOffersReadResult {
 
 /**
  * What the trade-offers PAGE needs, which is a different set from what the
- * gateway uploads. `PortfolioTradeItemDto` keeps ids plus a market name and
- * drops everything else on purpose; the page reads `descriptions` for sticker
- * and charm rows, `tags` for rarity/exterior colouring and `icon_url` for the
- * Doppler phase. Feeding the page the portfolio DTO silently zeroed all three.
+ * gateway uploads. `PortfolioTradeItemDto` keeps ids, market name, and the
+ * trusted icon needed for exact Doppler phase identity; the page additionally
+ * reads `descriptions` for sticker/charm rows and `tags` for rarity/exterior
+ * colouring. Feeding the page the portfolio DTO silently zeroed those richer
+ * presentation fields.
  *
  * These fields are Steam's own description payload, passed through unchanged —
  * the same trust level the inventory page already reads straight out of the
@@ -374,6 +375,7 @@ function normalizeTradeItem(
   const classId = requiredDigits(asset['classid'], `${path}.classid`);
   const instanceId = requiredDigits(asset['instanceid'] ?? '0', `${path}.instanceid`);
   const description = descriptions.get(`${classId}:${instanceId}`);
+  const iconUrl = description ? normalizeIconUrl(description['icon_url']) : undefined;
   const newAssetId = direction === 'received'
     ? optionalString(asset['new_assetid'], 32)
     : undefined;
@@ -397,6 +399,7 @@ function normalizeTradeItem(
     instanceId,
     amount: requiredDigits(asset['amount'] ?? '1', `${path}.amount`),
     ...(description ? { marketHashName: normalizeMarketName(description) } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
   };
 }
 

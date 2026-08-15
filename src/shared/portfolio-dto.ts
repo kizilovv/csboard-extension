@@ -44,6 +44,22 @@ function assertSteamAccountId(value: string, path: string): void {
   }
 }
 
+function assertSteamIconUrl(value: string, path: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new GatewayPayloadError('INVALID_PAYLOAD', { path });
+  }
+  const trustedIconOrigins = new Set([
+    'https://community.cloudflare.steamstatic.com',
+    'https://steamcommunity-a.akamaihd.net',
+  ]);
+  if (!trustedIconOrigins.has(url.origin) || !url.pathname.startsWith('/economy/image/')) {
+    throw new GatewayPayloadError('INVALID_PAYLOAD', { path });
+  }
+}
+
 function assertTradeItem(item: PortfolioTradeItemDto, path: string): void {
   if (item.appId !== '730') {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.appId` });
@@ -58,6 +74,9 @@ function assertTradeItem(item: PortfolioTradeItemDto, path: string): void {
   if (item.marketHashName !== undefined &&
       (!item.marketHashName.trim() || item.marketHashName.length > 240)) {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.marketHashName` });
+  }
+  if (item.iconUrl !== undefined) {
+    assertSteamIconUrl(item.iconUrl, `${path}.iconUrl`);
   }
 }
 
@@ -76,19 +95,7 @@ function assertInventoryItem(item: PortfolioItemDto, path: string): void {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.name` });
   }
   if (item.iconUrl) {
-    let url: URL;
-    try {
-      url = new URL(item.iconUrl);
-    } catch {
-      throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.iconUrl` });
-    }
-    const trustedIconOrigins = new Set([
-      'https://community.cloudflare.steamstatic.com',
-      'https://steamcommunity-a.akamaihd.net',
-    ]);
-    if (!trustedIconOrigins.has(url.origin) || !url.pathname.startsWith('/economy/image/')) {
-      throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.iconUrl` });
-    }
+    assertSteamIconUrl(item.iconUrl, `${path}.iconUrl`);
   }
   if (item.tradableAfter !== undefined) {
     assertTimestamp(item.tradableAfter, `${path}.tradableAfter`);
@@ -141,7 +148,11 @@ function assertOffer(offer: PortfolioOfferDto, path: string): void {
   if (offer.direction !== 'sent' && offer.direction !== 'received') {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.direction` });
   }
-  if (!Number.isSafeInteger(offer.state) || offer.state < 1 || offer.state > 32) {
+  // Portfolio accounting transports completed item movement only. Keeping the
+  // DTO itself terminal-state-only prevents another producer from bypassing
+  // the Steam provider/collector filters and emitting a live or rejected
+  // offer that the CSBOARD gateway will (correctly) reject.
+  if (offer.state !== 3) {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: `${path}.state` });
   }
   assertTimestamp(offer.createdAt, `${path}.createdAt`);

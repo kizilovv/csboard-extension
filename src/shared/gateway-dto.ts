@@ -184,6 +184,8 @@ export interface PortfolioTradeItemDto {
   readonly instanceId: string;
   readonly amount: string;
   readonly marketHashName?: string;
+  /** Trusted Steam Economy image; exact Doppler/Gamma phase evidence. */
+  readonly iconUrl?: string;
 }
 
 export interface PortfolioTradeDto {

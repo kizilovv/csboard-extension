@@ -19,7 +19,7 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 
 ## Security boundary
 
-- `onMessageExternal` exposes only a bounded `GET_EXTENSION_STATUS` response to the two exact CSBOARD origins. It cannot reach storage, Steam reads, selling or trade handlers.
+- `onMessageExternal` exposes a bounded `GET_EXTENSION_STATUS` response to the two exact CSBOARD origins and one exact-schema `PAIR_AND_ENABLE_PORTFOLIO_SYNC` action to `https://csfolder.com`. That action accepts only a single-use CSFolder code, enables exactly Inventory + Trade History and triggers the existing fenced sync path; it cannot unpair, select arbitrary sources, sell, trade or expose Steam credentials.
 - Steam cookies, `sessionid`, access/session tokens, passwords and Steam Guard/shared/identity secrets never leave the browser and never enter the sync outbox.
 - A narrow internal read-session provider can add a session-only Steam credential only to fixed read operations. Callers never receive the credential.
 - Opt-in portfolio chunks are validated and scanned, then encrypted before `fetch()` with the versioned CSBOARD HPKE gateway protocol and signed by a non-extractable per-install device key.
@@ -40,9 +40,11 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 | Buff163 | Opt-in local enhancement of the visited Buff page and its same-origin marketplace responses |
 
 The pairing code is generated in the user's authenticated CSFolder portfolio,
-not by CSBOARD. The extension opens that normal web page but has no CSFolder
-host permission and does not call the CSFolder consume API. It places the code
-only inside the HPKE-encrypted `pair/confirm` envelope; CSBOARD then validates
+not by CSBOARD. The extension has no CSFolder host permission and does not call
+the CSFolder consume API. After the user's explicit connect click, that exact
+origin may send only the bounded code/request message to the installed extension.
+The extension places the code only inside the HPKE-encrypted `pair/confirm`
+envelope; CSBOARD then validates
 the one-time assertion through a dedicated TLS + HMAC server-to-server call to
 CSFolder and durably binds the returned SteamID64. There is no CSBOARD
 `/pair/create` route.
