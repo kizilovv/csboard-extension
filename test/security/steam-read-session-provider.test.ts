@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { generateHex } from '@csfloat/cs2-inspect-serializer';
+
 import { MAX_PORTFOLIO_OFFERS_PER_RUN } from '../../src/shared/gateway-dto';
 import {
   STEAM_OFFERS_TRUNCATED_WARNING,
@@ -522,4 +524,85 @@ test('Steam inventory read recovers the trade-hold end from the owner-only descr
   // An owner-description without a date token is not a hold.
   assert.equal(free?.tradableAfter, undefined);
   assert.equal(free?.onHold, false);
+});
+
+test('Steam inventory read decodes exact float metadata from the inspect certificate', async () => {
+  const certificate = generateHex({
+    itemid: 333n,
+    defindex: 7,
+    paintindex: 474,
+    paintseed: 306,
+    paintwear: 0.6336590647697449,
+    stickers: [],
+    keychains: [],
+    variations: [],
+  });
+  const fetchImpl = (async () => new Response(JSON.stringify({
+    response: {
+      assets: [
+        { appid: 730, contextid: '2', assetid: '333', classid: '9', instanceid: '0', amount: '1' },
+      ],
+      descriptions: [
+        {
+          classid: '9',
+          instanceid: '0',
+          market_hash_name: 'AK-47 | Legacy (Battle-Scarred)',
+          tradable: 1,
+          marketable: 1,
+        },
+      ],
+      asset_properties: [
+        {
+          assetid: '333',
+          asset_properties: [{ propertyid: 6, string_value: certificate }],
+        },
+      ],
+      more_items: false,
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const provider = createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl });
+  provider.offerAccessToken('a'.repeat(40), STEAM_ID);
+
+  const result = await provider.readInventoryContext('2');
+  const item = result.items[0];
+
+  assert.ok(item?.floatValue !== undefined);
+  assert.ok(Math.abs(item.floatValue - 0.6336590647697449) < 1e-7);
+  assert.equal(item.paintSeed, 306);
+  assert.equal(item.defIndex, 7);
+  assert.equal(item.paintIndex, 474);
+});
+
+test('Steam inventory read accepts asset_properties object maps keyed by asset id', async () => {
+  const fetchImpl = (async () => new Response(JSON.stringify({
+    response: {
+      assets: [
+        { appid: 730, contextid: '2', assetid: '444', classid: '10', instanceid: '0', amount: '1' },
+      ],
+      descriptions: [
+        {
+          classid: '10',
+          instanceid: '0',
+          market_hash_name: 'M4A1-S | Printstream (Field-Tested)',
+          tradable: 1,
+          marketable: 1,
+        },
+      ],
+      asset_properties: {
+        '444': {
+          seed: { propertyid: '1', int_value: '581' },
+          float: { propertyid: '2', float_value: '0.31492' },
+        },
+      },
+      more_items: false,
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const provider = createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl });
+  provider.offerAccessToken('a'.repeat(40), STEAM_ID);
+
+  const result = await provider.readInventoryContext('2');
+  const item = result.items[0];
+
+  assert.equal(item?.floatValue, 0.31492);
+  assert.equal(item?.paintSeed, 581);
 });

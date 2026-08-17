@@ -9,6 +9,7 @@ import {
   type PortfolioTradeItemDto,
   type SteamInventoryContextId,
 } from '../shared/gateway-dto';
+import { parseSteamAssetProperties } from '../shared/steam-asset-properties';
 
 const STEAM_API_ROOT = 'https://api.steampowered.com/IEconService';
 const STEAM_TOKEN_PAGE = 'https://steamcommunity.com/my/tradehistory?l=english';
@@ -189,9 +190,29 @@ function optionalInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-function optionalFiniteNumber(value: unknown): number | undefined {
-  const numeric = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
+function buildAssetPropertiesMap(value: unknown): Map<string, Record<string, unknown>> {
+  const properties = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      const property = asRecord(entry, `$.asset_properties[${index}]`);
+      const assetId = optionalString(property['assetid'], 32);
+      if (assetId && /^[0-9]+$/.test(assetId)) properties.set(assetId, property);
+    }
+    return properties;
+  }
+  if (value === undefined || value === null) return properties;
+
+  const propertyMap = asRecord(value, '$.asset_properties');
+  for (const [assetId, entry] of Object.entries(propertyMap)) {
+    if (!/^[0-9]{1,32}$/.test(assetId)) continue;
+    properties.set(
+      assetId,
+      Array.isArray(entry)
+        ? { asset_properties: entry }
+        : asRecord(entry, `$.asset_properties.${assetId}`),
+    );
+  }
+  return properties;
 }
 
 /**
@@ -576,12 +597,7 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         ...(startAssetId ? { start_assetid: startAssetId } : {}),
       });
       const descriptions = buildDescriptionMap(asArray(response['descriptions']));
-      const properties = new Map<string, Record<string, unknown>>();
-      for (const entry of asArray(response['asset_properties'])) {
-        const property = asRecord(entry, '$.asset_properties[]');
-        const assetId = optionalString(property['assetid'], 32);
-        if (assetId && /^[0-9]+$/.test(assetId)) properties.set(assetId, property);
-      }
+      const properties = buildAssetPropertiesMap(response['asset_properties']);
 
       for (const [index, entry] of asArray(response['assets']).entries()) {
         const asset = asRecord(entry, `$.assets[${index}]`);
@@ -599,14 +615,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           });
         }
         const property = properties.get(assetId);
-        let floatValue: number | undefined;
-        let paintSeed: number | undefined;
-        for (const rawProperty of asArray(property?.['asset_properties'])) {
-          const itemProperty = asRecord(rawProperty, '$.asset_properties[].asset_properties[]');
-          const propertyId = optionalInteger(itemProperty['propertyid']);
-          if (propertyId === 1) paintSeed = optionalInteger(itemProperty['int_value']);
-          if (propertyId === 2) floatValue = optionalFiniteNumber(itemProperty['float_value']);
-        }
+        const { floatValue, paintSeed, defIndex, paintIndex } =
+          parseSteamAssetProperties(property);
         const tradable = Number(description['tradable']) === 1;
         const marketable = Number(description['marketable']) === 1;
         const tradableAfter = optionalInteger(
@@ -631,6 +641,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           ...(tradableAfter !== undefined ? { tradableAfter } : {}),
           ...(floatValue !== undefined ? { floatValue } : {}),
           ...(paintSeed !== undefined ? { paintSeed } : {}),
+          ...(defIndex !== undefined ? { defIndex } : {}),
+          ...(paintIndex !== undefined ? { paintIndex } : {}),
         });
       }
 

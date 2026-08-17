@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.5 — Store hotfix
+
+- Restored exact float, paint seed and paint identity metadata for the signed-in
+  user's items on Steam trade-offer pages. The extension now reads Steam's
+  enriched `rgInventory` item properties and decodes the inspect certificate
+  when a direct float property is absent.
+- Applied the same validated property parser to inventory and background Steam
+  reads, preserving direct metadata when available and safely ignoring malformed
+  certificates.
+
 ## 1.1.4 — Store release candidate
 
 - Restored hourly portfolio sync in browsers that block third-party Steam
