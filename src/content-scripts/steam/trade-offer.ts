@@ -28,6 +28,7 @@ import {
 } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
+import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
 
 const logger = createLogger('trade-offer');
 
@@ -184,13 +185,21 @@ const getItemInfoFromPage = (who: 'You' | 'Them'): Record<string, { contextID: s
             var desc = asset.description || {};
             var safeProp = null;
             try {
-              var rawProp = assetProps[asset.assetid];
+              // Steam's trade inventory keeps enriched CEconItem metadata in
+              // rgInventory, while newer page code exposes the base asset in
+              // m_rgAssets. Read both shapes before falling back to the
+              // separate property map.
+              var inventoryAsset = null;
+              try { inventoryAsset = inventory.rgInventory && inventory.rgInventory[asset.assetid]; } catch(e) {}
+              var rawProp = asset.asset_properties;
+              if (!rawProp || Object.keys(rawProp).length === 0) rawProp = inventoryAsset && inventoryAsset.asset_properties;
+              if (!rawProp || Object.keys(rawProp).length === 0) rawProp = assetProps[asset.assetid];
               if (rawProp) {
                 safeProp = [];
                 for (var pk in rawProp) {
                   if (!rawProp.hasOwnProperty(pk)) continue;
                   var p = rawProp[pk];
-                  if (p) safeProp.push({propertyid:p.propertyid,int_value:p.int_value||null,float_value:p.float_value||null});
+                  if (p) safeProp.push({propertyid:p.propertyid,def_index:p.def_index,int_value:p.int_value??null,float_value:p.float_value??null,string_value:p.string_value??null,value:p.value??null});
                 }
               }
             } catch(pe) {}
@@ -240,7 +249,7 @@ const getItemInfoFromPage = (who: 'You' | 'Them'): Record<string, { contextID: s
                 owner: steamID,
                 tags: asset2.tags,
                 owner_descriptions: asset2.owner_descriptions,
-                properties: null
+                properties: asset2.asset_properties || null
               });
             }
           } else trimmedAssets = null;
@@ -294,27 +303,18 @@ const buildInventoryStructure = (inventory: any[]): any[] => {
       item.owner_descriptions,
     );
 
-    // cs2trader: parse float from properties (propertyid 2 = float, 1 = paintseed)
-    let floatInfo: { floatvalue?: number; paintseed?: number } | null = null;
-    if (item.properties) {
-      const props = Array.isArray(item.properties) ? item.properties : Object.values(item.properties);
-      floatInfo = {};
-      for (const prop of props as any[]) {
-        if (!prop) continue;
-        if ((prop.propertyid === 1 || prop.def_index === 1) && (prop.int_value || prop.value))
-          floatInfo.paintseed = parseInt(prop.int_value || prop.value);
-        const rawFloat = prop.float_value ?? prop.value;
-        if (
-          (prop.propertyid === 2 || prop.def_index === 2) &&
-          rawFloat !== null &&
-          rawFloat !== undefined &&
-          rawFloat !== ''
-        ) {
-          floatInfo.floatvalue = parseFloat(rawFloat);
-        }
-      }
-      if (floatInfo.floatvalue === undefined && floatInfo.paintseed === undefined) floatInfo = null;
-    }
+    const parsedProperties = parseSteamAssetProperties(item.properties);
+    const floatInfo =
+      parsedProperties.floatValue !== undefined || parsedProperties.paintSeed !== undefined
+        ? {
+            ...(parsedProperties.floatValue !== undefined
+              ? { floatvalue: parsedProperties.floatValue }
+              : {}),
+            ...(parsedProperties.paintSeed !== undefined
+              ? { paintseed: parsedProperties.paintSeed }
+              : {}),
+          }
+        : null;
 
     // cs2trader: sticker price from description.name === 'sticker_info'
     let stickerTotal = 0;
@@ -358,6 +358,8 @@ const buildInventoryStructure = (inventory: any[]): any[] => {
       duplicates: duplicates[item.market_hash_name],
       owner: item.owner,
       floatInfo,
+      defIndex: parsedProperties.defIndex,
+      paintIndex: parsedProperties.paintIndex,
       patternInfo: getPattern(item.market_hash_name, floatInfo?.paintseed ?? null),
       descriptions: item.descriptions,
       tags: item.tags,
@@ -654,8 +656,10 @@ const addPerItemInfo = (_inventoryOwnerID?: string): void => {
     makeItemColorful(el, item.tags, item.name_color, item.market_hash_name || item.name, item.iconURL);
 
     // Float indicator (above price)
-    if (item.floatInfo?.floatvalue) {
-      addFloatIndicator(el, item.floatInfo.floatvalue, 5);
+    const exactFloat = item.floatInfo?.floatvalue;
+    if (typeof exactFloat === 'number' &&
+        Number.isFinite(exactFloat) && exactFloat >= 0 && exactFloat <= 1) {
+      addFloatIndicator(el, exactFloat, 5);
     }
 
     // Exterior + StatTrak/Souvenir + sticker price (top-right)
@@ -1464,7 +1468,7 @@ const mergeFloatData = (apiItems: any[]): number => {
       if (Number.isInteger(apiItem.defIndex)) item.defIndex = apiItem.defIndex;
       if (Number.isInteger(apiItem.paintIndex)) item.paintIndex = apiItem.paintIndex;
       // Recalculate pattern info now that we have paintseed
-      if (!item.patternInfo && item.floatInfo.paintseed) {
+      if (!item.patternInfo && Number.isFinite(item.floatInfo.paintseed)) {
         item.patternInfo = getPattern(item.market_hash_name, item.floatInfo.paintseed);
       }
       count++;

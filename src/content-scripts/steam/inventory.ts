@@ -24,7 +24,7 @@ import {
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { setupSellUi, injectSellPanel, repaintSellSelection } from './sell-ui';
-import { decodeHex } from '@csfloat/cs2-inspect-serializer';
+import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
 
 const logger = createLogger('inventory');
 
@@ -178,42 +178,11 @@ const buildInventory = (rawItems: any[]): { items: any[]; total: number } => {
       item.owner_descriptions,
     );
 
-    // Steam m_rgAssetProperties: 1=paintSeed, 2=float, 6=protobuf hex (full item data)
-    let floatValue: number | null = null;
-    let paintSeed: number | null = null;
-    let defIndex: number | null = null;
-    let paintIndex: number | null = null;
-    if (item.properties) {
-      const props = Array.isArray(item.properties) ? item.properties : Object.values(item.properties);
-      for (const prop of props as any[]) {
-        if (!prop) continue;
-        if (prop.propertyid === 1 && prop.int_value) paintSeed = parseInt(prop.int_value);
-        if (
-          prop.propertyid === 2 &&
-          prop.float_value !== null &&
-          prop.float_value !== undefined &&
-          prop.float_value !== ''
-        ) {
-          floatValue = parseFloat(prop.float_value);
-        }
-        // propertyid 6 = protobuf hex certificate — decode for defindex, paintindex, stickers etc.
-        if (prop.propertyid === 6 && prop.string_value) {
-          try {
-            const decoded = decodeHex(prop.string_value);
-            if (decoded.defindex) defIndex = decoded.defindex;
-            if (decoded.paintindex) paintIndex = decoded.paintindex;
-            // Use decoded paintseed/paintwear as fallback if not from propertyid 1/2
-            if (!paintSeed && decoded.paintseed) paintSeed = decoded.paintseed;
-            if (floatValue === null && decoded.paintwear !== undefined) {
-              floatValue = decoded.paintwear;
-            }
-          } catch { /* invalid hex, skip */ }
-        }
-      }
-    }
-    if (floatValue !== null && (!Number.isFinite(floatValue) || floatValue < 0 || floatValue > 1)) {
-      floatValue = null;
-    }
+    const parsedProperties = parseSteamAssetProperties(item.properties);
+    const floatValue = parsedProperties.floatValue ?? null;
+    const paintSeed = parsedProperties.paintSeed ?? null;
+    const defIndex = parsedProperties.defIndex ?? null;
+    const paintIndex = parsedProperties.paintIndex ?? null;
 
     // cs2trader EXACT: parse stickers from description.name === 'sticker_info'
     // Format: {name: 'sticker_info', value: '<html with sticker names>'}
