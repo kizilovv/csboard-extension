@@ -18,6 +18,15 @@ export interface SteamPageCredential {
   readonly pageSteamId: string;
 }
 
+export interface SteamPageCredentialRequest {
+  readonly type: 'REQUEST_STEAM_PAGE_CREDENTIAL';
+  readonly version: 1;
+}
+
+export interface SteamPageCredentialResponse {
+  readonly credential: SteamPageCredential | null;
+}
+
 export const STEAM_COMMUNITY_ORIGIN = 'https://steamcommunity.com' as const;
 
 function cleanToken(raw: string | null | undefined): string | null {
@@ -61,6 +70,27 @@ export function normalizeSteamPageCredential(value: unknown): SteamPageCredentia
     : '';
   if (!token || !/^7656119\d{10}$/.test(steamId)) return null;
   return { pageAccessToken: token, pageSteamId: steamId };
+}
+
+/** Exact-schema worker -> trusted Steam content-script request. */
+export function isSteamPageCredentialRequest(
+  value: unknown,
+): value is SteamPageCredentialRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return keys.length === 2 && keys[0] === 'type' && keys[1] === 'version' &&
+    record['type'] === 'REQUEST_STEAM_PAGE_CREDENTIAL' && record['version'] === 1;
+}
+
+/** Validates the private tab response before it can enter provider memory. */
+export function normalizeSteamPageCredentialResponse(
+  value: unknown,
+): SteamPageCredential | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || !('credential' in record)) return null;
+  return normalizeSteamPageCredential(record['credential']);
 }
 
 /** Exact-origin sender gate for the credential-only internal message. */

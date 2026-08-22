@@ -27,6 +27,10 @@ import { GatewayPayloadError } from '../shared/gateway-dto';
 import {
   isTrustedSteamPageSender,
   normalizeSteamPageCredential,
+  normalizeSteamPageCredentialResponse,
+  STEAM_COMMUNITY_ORIGIN,
+  type SteamPageCredential,
+  type SteamPageCredentialRequest,
 } from '../shared/steam-page-credential';
 import {
   DEFAULT_POPUP_SETTINGS,
@@ -112,6 +116,91 @@ router.on('REFRESH_PRICES', async () => {
 // The provider owns its memory-only credential. Messages never carry or return it.
 let steamReadProvider: SteamReadSessionProvider | null = null;
 let steamReadProviderAccount: string | null = null;
+const MAX_STEAM_CREDENTIAL_TABS = 5;
+const STEAM_CREDENTIAL_TAB_TIMEOUT_MS = 1_000;
+let steamCredentialRequestInFlight: {
+  readonly steamId: string;
+  readonly promise: Promise<SteamPageCredential | null>;
+} | null = null;
+
+function isTrustedSteamTab(tab: chrome.tabs.Tab): tab is chrome.tabs.Tab & { id: number; url: string } {
+  if (!Number.isSafeInteger(tab.id) || typeof tab.url !== 'string') return false;
+  try {
+    const url = new URL(tab.url);
+    return url.origin === STEAM_COMMUNITY_ORIGIN && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function withSteamCredentialTimeout(promise: Promise<unknown>): Promise<unknown> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      resolve(null);
+    }, STEAM_CREDENTIAL_TAB_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+function requestSteamPageCredential(expectedSteamId: string): Promise<SteamPageCredential | null> {
+  if (steamCredentialRequestInFlight?.steamId === expectedSteamId) {
+    return steamCredentialRequestInFlight.promise;
+  }
+  const pending = performSteamPageCredentialRequest(expectedSteamId);
+  const tracked = pending.finally(() => {
+    if (steamCredentialRequestInFlight?.promise === tracked) {
+      steamCredentialRequestInFlight = null;
+    }
+  });
+  steamCredentialRequestInFlight = { steamId: expectedSteamId, promise: tracked };
+  return tracked;
+}
+
+async function performSteamPageCredentialRequest(
+  expectedSteamId: string,
+): Promise<SteamPageCredential | null> {
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({ url: `${STEAM_COMMUNITY_ORIGIN}/*` });
+  } catch {
+    return null;
+  }
+  const request: SteamPageCredentialRequest = {
+    type: 'REQUEST_STEAM_PAGE_CREDENTIAL',
+    version: 1,
+  };
+  const candidates = tabs.filter(isTrustedSteamTab).slice(0, MAX_STEAM_CREDENTIAL_TABS);
+  const responses = await Promise.all(candidates.map(async (tab) => {
+    try {
+      const response = await withSteamCredentialTimeout(
+        chrome.tabs.sendMessage(tab.id, request),
+      );
+      return normalizeSteamPageCredentialResponse(response);
+    } catch {
+      return null;
+    }
+  }));
+  const matching = responses.find((credential) => credential?.pageSteamId === expectedSteamId);
+  // An open foreign/stale tab is only a candidate, not authoritative session
+  // proof. Let the caller fall back to Steam's current session; that path keeps
+  // the real account-mismatch check fail-closed.
+  return matching ?? null;
+}
 
 /**
  * `pageCredential` is a webapi token a content script read straight out of the
@@ -124,8 +213,8 @@ async function getSteamReadProvider(
   expectedSteamId?: string,
   pageCredential?: { token?: string; steamId?: string },
 ): Promise<SteamReadSessionProvider> {
-  const pageSteamId = pageCredential?.steamId;
-  const pageToken = pageCredential?.token;
+  let pageSteamId = pageCredential?.steamId;
+  let pageToken = pageCredential?.token;
   // A credential bridge has already bound a fresh token to this exact paired
   // account. Re-probing steamcommunity.com from the extension origin here
   // would discard that first-party proof under third-party-cookie blocking.
@@ -133,6 +222,13 @@ async function getSteamReadProvider(
       steamReadProviderAccount === expectedSteamId &&
       steamReadProvider.hasUsableAccessToken?.()) {
     return steamReadProvider;
+  }
+  if (!pageSteamId && !pageToken && expectedSteamId) {
+    const firstParty = await requestSteamPageCredential(expectedSteamId);
+    if (firstParty) {
+      pageSteamId = firstParty.pageSteamId;
+      pageToken = firstParty.pageAccessToken;
+    }
   }
   // A page-supplied identity is first-party proof of who is signed in, so it
   // stands in for the session probe the worker cannot always make.
@@ -150,7 +246,15 @@ async function getSteamReadProvider(
   }
   if (!steamReadProvider || steamReadProviderAccount !== actualSteamId) {
     clearSteamReadProvider();
-    steamReadProvider = createSteamReadSessionProvider({ steamId: actualSteamId });
+    steamReadProvider = createSteamReadSessionProvider({
+      steamId: actualSteamId,
+      requestFirstPartyCredential: async () => {
+        const credential = await requestSteamPageCredential(actualSteamId);
+        return credential
+          ? { token: credential.pageAccessToken, steamId: credential.pageSteamId }
+          : null;
+      },
+    });
     steamReadProviderAccount = actualSteamId;
   }
   if (pageToken && pageSteamId) {
@@ -640,6 +744,17 @@ router.on('UPDATE_EXTENSION_SETTINGS', async (msg, sender) => {
   if (portfolioUnpairing && patch.portfolioSyncEnabled === true) {
     throw new Error('UNPAIR_IN_PROGRESS');
   }
+  const projectedSettings: ExtensionSettings = {
+    ...currentSettings,
+    ...patch,
+    portfolioSources: patch.portfolioSources ?? currentSettings.portfolioSources,
+  };
+  if (!projectedSettings.portfolioSyncEnabled || !hasEnabledPortfolioSource(projectedSettings)) {
+    // Fence in-flight uploads before storage I/O. If persistence fails, the
+    // process remains blocked until a fresh explicit opt-in.
+    portfolioUploadsBlocked = true;
+    portfolioSyncEpoch += 1;
+  }
   const settings = await updateSettings(patch);
   if (patch.portfolioSyncEnabled === true) {
     // A fresh explicit opt-in is the only way to lift the local fail-closed
@@ -647,6 +762,7 @@ router.on('UPDATE_EXTENSION_SETTINGS', async (msg, sender) => {
     allowPortfolioUploadsAfterExplicitConsent();
   }
   if (!settings.portfolioSyncEnabled || !hasEnabledPortfolioSource(settings)) {
+    clearSteamReadProvider();
     await clearPortfolioAutoSyncState().catch((error) => {
       logger.warn('Could not clear automatic portfolio sync state', { error: String(error) });
     });
@@ -854,6 +970,16 @@ function portfolioSyncSuccessStatus(
   if (settings.portfolioSources.tradeHistory && !failedSources.has('tradeHistory')) {
     sourceRecords.tradeHistory = result.trades;
   }
+  const sourceWarnings: Partial<Record<PortfolioSource, string>> = {};
+  if (settings.portfolioSources.tradeHistory && !failedSources.has('tradeHistory')) {
+    if (result.warningCodes.includes('TRADE_HISTORY_TRUNCATED')) {
+      sourceWarnings.tradeHistory = 'TRADE_HISTORY_TRUNCATED';
+    } else if (result.warningCodes.includes('OVERSIZED_RECORDS_DROPPED')) {
+      // Accepted offers are hidden enrichment of Trade History, so an
+      // oversized trade or accepted offer belongs on the visible history row.
+      sourceWarnings.tradeHistory = 'OVERSIZED_RECORDS_DROPPED';
+    }
+  }
   return {
     lastAttemptedAt: attemptedAt,
     lastSuccessfulAt: successfulAt,
@@ -861,9 +987,12 @@ function portfolioSyncSuccessStatus(
     sourceErrors: Object.fromEntries(
       result.failedSources
         .filter((source) => source !== 'tradeOffers')
-        .map((source) => [source, 'STEAM_READ_FAILED']),
+        .map((source) => [
+          source,
+          result.sourceFailureCodes[source] ?? 'STEAM_READ_FAILED',
+        ]),
     ),
-    sourceWarnings: {},
+    sourceWarnings,
   };
 }
 
@@ -1238,6 +1367,7 @@ registerExternalStatusRouter({
       // resume uploads from stale enabled settings.
       portfolioUploadsBlocked = true;
       portfolioSyncEpoch += 1;
+      clearSteamReadProvider();
       try {
         await updateSettings({
           portfolioSyncEnabled: false,

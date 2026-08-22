@@ -193,6 +193,56 @@ test('Steam trade history sends the real cursor and exposes pagination metadata'
   assert.equal(result.trades[0]?.tradeId, '3003');
 });
 
+test('a first-party token remains memory-usable across the hourly sync boundary', () => {
+  let now = 2_000_000_000_000;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    fetchImpl: (async () => {
+      throw new Error('network must not be touched by the memory-only status check');
+    }) as typeof fetch,
+    now: () => now,
+  });
+  provider.offerAccessToken('a'.repeat(40), STEAM_ID);
+
+  now += 61 * 60 * 1_000;
+  assert.equal(provider.hasUsableAccessToken?.(), true);
+});
+
+test('explicit token refresh replaces the private credential without exposing it', async () => {
+  const oldToken = 'a'.repeat(40);
+  const freshToken = 'b'.repeat(40);
+  const requestedApiTokens: string[] = [];
+  let tokenPageReads = 0;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://steamcommunity.com/')) {
+        tokenPageReads += 1;
+        const response = new Response(
+          `<script>var g_steamID = "${STEAM_ID}";</script>` +
+          `<div data-loyalty_webapi_token="${freshToken}"></div>`,
+          { status: 200 },
+        );
+        Object.defineProperty(response, 'url', { value: url });
+        return response;
+      }
+      requestedApiTokens.push(new URL(url).searchParams.get('access_token') ?? '');
+      return new Response(JSON.stringify({
+        response: { trades: [], descriptions: [], more: false, total_trades: 0 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch,
+  });
+  provider.offerAccessToken(oldToken, STEAM_ID);
+
+  await provider.refreshAccessToken?.();
+  await provider.readRecentTrades(1, { includeTotal: true });
+
+  assert.equal(tokenPageReads, 1);
+  assert.deepEqual(requestedApiTokens, [freshToken]);
+  assert.equal('accessToken' in provider, false);
+});
+
 test('accepted Steam offers use post-trade ids only for received items', async () => {
   const offer = {
     ...rawOffer(30, 1_700_000_030),

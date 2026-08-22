@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.6 — Sync reliability hotfix
+
+- Restored manual and hourly portfolio sync when the extension worker starts
+  cold by requesting an account-bound credential from an open signed-in Steam
+  tab on demand. The credential remains memory-only and is never logged,
+  persisted or uploaded.
+- Paginated and deduplicated recent Steam trade history, preserved successful
+  sources when another source fails, and surfaced partial-history and
+  source-specific errors instead of collapsing the whole run into one generic
+  sync failure.
+
 ## 1.1.5 — Store hotfix
 
 - Restored exact float, paint seed and paint identity metadata for the signed-in

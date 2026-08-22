@@ -113,6 +113,7 @@ async function bundledWorker(): Promise<string> {
             '  portfolioCollectorSources as __testPortfolioCollectorSources,',
             '  portfolioSyncSuccessStatus as __testPortfolioSyncSuccessStatus,',
             '  safePortfolioErrorCode as __testSafePortfolioErrorCode,',
+            '  getSteamReadProvider as __testGetSteamReadProvider,',
             '  beginPortfolioUnpairFence as __testBeginPortfolioUnpairFence,',
             '  finishPortfolioUnpairAttempt as __testFinishPortfolioUnpairAttempt,',
             '  allowPortfolioUploadsAfterExplicitConsent as __testAllowPortfolioUploads,',
@@ -136,6 +137,12 @@ interface WorkerHarnessOptions {
   readonly paired?: boolean;
   readonly failAutoStateRead?: boolean;
   readonly autoSyncState?: Bag;
+  readonly steamPageCredential?: {
+    readonly pageAccessToken: string;
+    readonly pageSteamId: string;
+  };
+  readonly steamTabUrl?: string;
+  readonly steamSessionSteamId?: string;
 }
 
 async function loadWorker(options: WorkerHarnessOptions = {}) {
@@ -155,6 +162,8 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
   };
   const writes: Bag[] = [];
   const alarms: Array<{ name: string; info: Bag }> = [];
+  const tabMessages: Array<{ tabId: number; message: Bag }> = [];
+  const fetchUrls: string[] = [];
   const onAlarm = event<{ name: string }>();
   const onInstalled = event<{ reason: string }>();
   const onStartup = event<void>();
@@ -231,11 +240,29 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
       },
       tabs: {
         create() {},
-        query: async () => [],
-        sendMessage: async () => undefined,
+        query: async () => options.steamPageCredential
+          ? [{
+              id: 71,
+              url: options.steamTabUrl ?? 'https://steamcommunity.com/id/trader/inventory',
+            }]
+          : [],
+        sendMessage: async (tabId: number, message: Bag) => {
+          tabMessages.push({ tabId, message: structuredClone(message) });
+          return { credential: options.steamPageCredential ?? null };
+        },
       },
     },
-    fetch: async () => {
+    fetch: async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL ? input.href : input.url;
+      fetchUrls.push(url);
+      if (url === 'https://steamcommunity.com' && options.steamSessionSteamId) {
+        return new Response(
+          `<script>var g_steamID = "${options.steamSessionSteamId}";</script>`,
+          { status: 200 },
+        );
+      }
       throw new Error('network disabled in scheduler test');
     },
   });
@@ -263,6 +290,9 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
       successfulAt: number,
     ) => Bag;
     __testSafePortfolioErrorCode: (error: unknown) => string;
+    __testGetSteamReadProvider: (steamId: string) => Promise<{
+      hasUsableAccessToken?: () => boolean;
+    }>;
     __testBeginPortfolioUnpairFence: () => number;
     __testFinishPortfolioUnpairAttempt: () => void;
     __testAllowPortfolioUploads: () => void;
@@ -277,7 +307,9 @@ async function loadWorker(options: WorkerHarnessOptions = {}) {
 
   return {
     alarms,
+    fetchUrls,
     local,
+    tabMessages,
     writes,
     workerModule,
     async fireAlarm(name = AUTO_SYNC_ALARM) {
@@ -407,14 +439,68 @@ test('trade history consent enables privacy-safe offer enrichment without exposi
       trades: 0,
       offers: 99,
       failedSources: [],
-      warningCodes: ['TRADE_OFFERS_TRUNCATED'],
+      sourceFailureCodes: {},
+      warningCodes: ['TRADE_OFFERS_TRUNCATED', 'TRADE_HISTORY_TRUNCATED'],
     },
     10,
     20,
   );
   assert.deepEqual(success.sourceRecords, { inventory: 7, tradeHistory: 0 });
   assert.deepEqual(success.sourceErrors, {});
-  assert.deepEqual(success.sourceWarnings, {});
+  assert.deepEqual(success.sourceWarnings, { tradeHistory: 'TRADE_HISTORY_TRUNCATED' });
+
+  const oversized = workerModule.__testPortfolioSyncSuccessStatus(
+    previous,
+    {
+      ...DEFAULT_POPUP_SETTINGS,
+      portfolioSyncEnabled: true,
+      portfolioSources: {
+        ...DEFAULT_POPUP_SETTINGS.portfolioSources,
+        tradeHistory: true,
+      },
+    },
+    {
+      queued: 0,
+      inventoryItems: 0,
+      trades: 1,
+      offers: 0,
+      failedSources: [],
+      sourceFailureCodes: {},
+      warningCodes: ['OVERSIZED_RECORDS_DROPPED'],
+    },
+    21,
+    22,
+  );
+  assert.deepEqual(oversized.sourceWarnings, {
+    tradeHistory: 'OVERSIZED_RECORDS_DROPPED',
+  });
+
+  const sessionFailure = workerModule.__testPortfolioSyncSuccessStatus(
+    previous,
+    {
+      ...DEFAULT_POPUP_SETTINGS,
+      portfolioSyncEnabled: true,
+      portfolioSources: {
+        ...DEFAULT_POPUP_SETTINGS.portfolioSources,
+        inventory: true,
+        tradeHistory: true,
+      },
+    },
+    {
+      queued: 0,
+      inventoryItems: 7,
+      trades: 0,
+      offers: 0,
+      failedSources: ['tradeHistory'],
+      sourceFailureCodes: { tradeHistory: 'STEAM_SESSION_REQUIRED' },
+      warningCodes: [],
+    },
+    30,
+    40,
+  );
+  assert.deepEqual(sessionFailure.sourceErrors, {
+    tradeHistory: 'STEAM_SESSION_REQUIRED',
+  });
 });
 
 test('a failed remote unpair keeps local uploads blocked until fresh explicit consent', async () => {
@@ -575,6 +661,169 @@ test('automatic failures are contained and persist only bounded scheduler metada
     persistedKeys.some((key) => /steam.*(?:token|credential|password|secret)|sessionid/i.test(key)),
     false,
   );
+});
+
+test('a cold worker requests a credential immediately from an existing trusted Steam tab', async () => {
+  const harness = await loadWorker({
+    paired: true,
+    settings: {
+      portfolioSyncEnabled: true,
+      portfolioSources: { tradeHistory: true },
+    },
+    steamPageCredential: {
+      pageAccessToken: PAGE_TOKEN,
+      pageSteamId: '76561198000000000',
+    },
+  });
+
+  const provider = await harness.workerModule.__testGetSteamReadProvider(
+    '76561198000000000',
+  );
+
+  assert.deepEqual(harness.tabMessages, [{
+    tabId: 71,
+    message: { type: 'REQUEST_STEAM_PAGE_CREDENTIAL', version: 1 },
+  }]);
+  assert.equal(provider.hasUsableAccessToken?.(), true);
+  assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+  assert.equal(JSON.stringify(harness.writes).includes(PAGE_TOKEN), false);
+});
+
+test('cold credential refresh ignores non-Steam tab URLs before messaging', async () => {
+  const harness = await loadWorker({
+    paired: true,
+    settings: {
+      portfolioSyncEnabled: true,
+      portfolioSources: { tradeHistory: true },
+    },
+    steamPageCredential: {
+      pageAccessToken: PAGE_TOKEN,
+      pageSteamId: '76561198000000000',
+    },
+    steamTabUrl: 'https://evil.steamcommunity.com/id/trader',
+  });
+
+  await assert.rejects(
+    harness.workerModule.__testGetSteamReadProvider('76561198000000000'),
+    /STEAM_SESSION_REQUIRED/,
+  );
+  assert.deepEqual(harness.tabMessages, []);
+  assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+});
+
+test('cold credential probing ignores another account tab and accepts matching session proof', async () => {
+  const harness = await loadWorker({
+    paired: true,
+    settings: {
+      portfolioSyncEnabled: true,
+      portfolioSources: { tradeHistory: true },
+    },
+    steamPageCredential: {
+      pageAccessToken: PAGE_TOKEN,
+      pageSteamId: '76561198000000001',
+    },
+    steamSessionSteamId: '76561198000000000',
+  });
+
+  const provider = await harness.workerModule.__testGetSteamReadProvider(
+    '76561198000000000',
+  );
+
+  assert.equal(provider.hasUsableAccessToken?.(), false);
+  assert.deepEqual(harness.fetchUrls, ['https://steamcommunity.com']);
+  assert.equal(JSON.stringify(harness.local).includes(PAGE_TOKEN), false);
+});
+
+test('cold credential fallback still fails closed for a proven active account mismatch', async () => {
+  const harness = await loadWorker({
+    paired: true,
+    settings: {
+      portfolioSyncEnabled: true,
+      portfolioSources: { tradeHistory: true },
+    },
+    steamPageCredential: {
+      pageAccessToken: PAGE_TOKEN,
+      pageSteamId: '76561198000000001',
+    },
+    steamSessionSteamId: '76561198000000001',
+  });
+
+  await assert.rejects(
+    harness.workerModule.__testGetSteamReadProvider('76561198000000000'),
+    /STEAM_ACCOUNT_MISMATCH/,
+  );
+  assert.deepEqual(harness.fetchUrls, ['https://steamcommunity.com']);
+});
+
+test('explicit portfolio opt-out destroys the memory-only provider and token', async () => {
+  const scenarios: Array<{ readonly name: string; readonly patch: Bag }> = [
+    {
+      name: 'master switch off',
+      patch: { portfolioSyncEnabled: false },
+    },
+    {
+      name: 'all supported sources off',
+      patch: {
+        portfolioSources: {
+          inventory: false,
+          tradeOffers: false,
+          tradeHistory: false,
+          marketHistory: false,
+        },
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const harness = await loadWorker({
+      paired: true,
+      settings: {
+        portfolioSyncEnabled: true,
+        portfolioSources: { tradeHistory: true },
+      },
+      steamPageCredential: {
+        pageAccessToken: PAGE_TOKEN,
+        pageSteamId: '76561198000000000',
+      },
+    });
+    const provider = await harness.workerModule.__testGetSteamReadProvider(
+      '76561198000000000',
+    );
+    assert.equal(provider.hasUsableAccessToken?.(), true, scenario.name);
+
+    const response = await harness.fireInternalMessage({
+      type: 'UPDATE_EXTENSION_SETTINGS',
+      version: 2,
+      data: { patch: scenario.patch },
+    }, {
+      id: 'auto-sync-test',
+      url: 'chrome-extension://auto-sync-test/popup/popup.html',
+    });
+
+    assert.equal(response.success, true, scenario.name);
+    assert.equal(provider.hasUsableAccessToken?.(), false, scenario.name);
+    assert.deepEqual(
+      await harness.fireInternalMessage(
+        { type: 'GET_STEAM_READ_SESSION_STATUS' },
+        { id: 'auto-sync-test' },
+      ),
+      { ready: false },
+      scenario.name,
+    );
+    assert.equal(
+      await harness.workerModule.__testRunCredentialAssistedPortfolioSync(
+        1,
+        '76561198000000000',
+        {
+          pageAccessToken: PAGE_TOKEN,
+          pageSteamId: '76561198000000000',
+        },
+      ),
+      false,
+      scenario.name,
+    );
+    assert.equal(CREDENTIAL_SYNC_STATE_KEY in harness.local, false, scenario.name);
+  }
 });
 
 test('a scheduler-state storage failure never escapes the alarm listener', async () => {

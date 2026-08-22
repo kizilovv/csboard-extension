@@ -4,6 +4,7 @@ import {
   GatewayPayloadError,
   MAX_GATEWAY_CHUNKS_PER_RUN,
   MAX_PORTFOLIO_INVENTORY_ITEMS_PER_RUN,
+  MAX_PORTFOLIO_TRADES_PER_RUN,
   TARGET_GATEWAY_CHUNK_BYTES,
   byteLengthOfCanonicalJson,
   type PortfolioItemDto,
@@ -13,7 +14,10 @@ import {
 } from '../../src/shared/gateway-dto';
 import { assertPortfolioSnapshot } from '../../src/shared/portfolio-dto';
 import { createRetryingLazyPromise } from '../../src/shared/retrying-lazy-promise';
-import { collectPortfolioSync } from '../../src/background/portfolio-collector';
+import {
+  TRADE_HISTORY_TRUNCATED_WARNING,
+  collectPortfolioSync,
+} from '../../src/background/portfolio-collector';
 import type { SteamReadSessionProvider } from '../../src/background/steam-read-session-provider';
 import { STEAM_OFFERS_TRUNCATED_WARNING } from '../../src/background/steam-read-session-provider';
 
@@ -41,6 +45,10 @@ const trade: PortfolioTradeDto = {
   itemsGiven: [],
   itemsReceived: [],
 };
+
+function tradeAt(tradeId: string, occurredAt: number): PortfolioTradeDto {
+  return { ...trade, tradeId, occurredAt };
+}
 
 const offer: PortfolioOfferDto = {
   offerId: '8001',
@@ -105,6 +113,158 @@ test('portfolio collector isolates append-only Steam source failures', async () 
   assert.equal(collected.snapshot.completeness.inventoryContext16, true);
   assert.equal(collected.snapshot.completeness.trades, true);
   assert.equal(collected.snapshot.completeness.offers, false);
+});
+
+test('trade-history failure is recorded once with a safe source reason', async () => {
+  const collected = await collectPortfolioSync({
+    steamId: STEAM_ID,
+    provider: provider({
+      async readRecentTrades() {
+        throw new GatewayPayloadError('INVALID_PAYLOAD', {
+          reason: 'steam-read-failed',
+          status: 429,
+        });
+      },
+    }),
+    createSyncRunId: () => 'sync_run_trade_failure_0123456789',
+    now: () => 1_700_000_200_000,
+  });
+
+  assert.deepEqual(collected.summary.failedSources, ['tradeHistory']);
+  assert.deepEqual(collected.summary.sourceFailureCodes, {
+    tradeHistory: 'STEAM_RATE_LIMITED',
+  });
+  assert.equal(collected.snapshot.completeness.trades, false);
+});
+
+test('portfolio trade history starts at latest, paginates with real cursors, and deduplicates', async () => {
+  const calls: Array<{
+    maxTrades: number | undefined;
+    cursor?: { startAfterTime: number; startAfterTradeId: string };
+    includeTotal?: boolean;
+  }> = [];
+  const pages = [
+    {
+      trades: [tradeAt('5005', 1_776_816_000), tradeAt('5004', 1_776_815_000)],
+      hasMore: true,
+      totalTrades: 5,
+    },
+    {
+      trades: [tradeAt('5004', 1_776_815_000), tradeAt('5003', 1_776_814_000)],
+      hasMore: true,
+    },
+    {
+      trades: [tradeAt('5002', 1_776_813_000), tradeAt('5001', 1_776_812_000)],
+      hasMore: true,
+    },
+  ];
+  const collected = await collectPortfolioSync({
+    steamId: STEAM_ID,
+    provider: provider({
+      async readRecentTrades(maxTrades, options) {
+        calls.push({
+          maxTrades,
+          ...(options?.cursor ? { cursor: options.cursor } : {}),
+          ...(options?.includeTotal !== undefined ? { includeTotal: options.includeTotal } : {}),
+        });
+        const page = pages[calls.length - 1];
+        assert.ok(page, 'collector exceeded the bounded page fixture');
+        return { complete: true, icons: {}, nameColors: {}, ...page };
+      },
+    }),
+    recentTradeLimit: 5,
+    createSyncRunId: () => 'sync_run_trade_pages_012345678901',
+    now: () => 1_776_816_000_000,
+  });
+
+  assert.equal(calls[0]?.cursor, undefined, 'every sync run must begin at the latest page');
+  assert.equal(calls[0]?.includeTotal, true);
+  assert.deepEqual(calls[1]?.cursor, {
+    startAfterTime: 1_776_815_000,
+    startAfterTradeId: '5004',
+  });
+  assert.deepEqual(calls[2]?.cursor, {
+    startAfterTime: 1_776_814_000,
+    startAfterTradeId: '5003',
+  });
+  assert.deepEqual(
+    collected.snapshot.trades.map((entry) => entry.tradeId),
+    ['5005', '5004', '5003', '5002', '5001'],
+  );
+  assert.equal(collected.snapshot.trades[0]?.occurredAt, 1_776_816_000);
+  assert.equal(collected.snapshot.completeness.trades, true);
+  assert.deepEqual(collected.summary.failedSources, []);
+  assert.deepEqual(collected.summary.warningCodes, []);
+});
+
+test('trade-history run cap keeps the newest records and reports partial completeness', async () => {
+  let calls = 0;
+  const newest = Array.from(
+    { length: MAX_PORTFOLIO_TRADES_PER_RUN },
+    (_, index) => tradeAt(String(9_000 - index), 1_776_816_000 - index),
+  );
+  const collected = await collectPortfolioSync({
+    steamId: STEAM_ID,
+    provider: provider({
+      async readRecentTrades(_maxTrades, options) {
+        calls += 1;
+        assert.equal(options?.cursor, undefined, 'the latest page must not inherit a stale cursor');
+        return {
+          complete: true,
+          trades: newest,
+          icons: {},
+          nameColors: {},
+          hasMore: true,
+          totalTrades: 145,
+        };
+      },
+    }),
+    createSyncRunId: () => 'sync_run_trade_cap_01234567890123',
+    now: () => 1_776_816_000_000,
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(collected.snapshot.trades.length, MAX_PORTFOLIO_TRADES_PER_RUN);
+  assert.equal(collected.snapshot.trades[0]?.tradeId, '9000');
+  assert.equal(collected.snapshot.completeness.trades, false);
+  assert.deepEqual(collected.summary.failedSources, []);
+  assert.ok(collected.summary.warningCodes.includes(TRADE_HISTORY_TRUNCATED_WARNING));
+});
+
+test('trade-history session failure gets one bounded refresh and page retry', async () => {
+  let reads = 0;
+  let refreshes = 0;
+  const collected = await collectPortfolioSync({
+    steamId: STEAM_ID,
+    provider: provider({
+      async readRecentTrades() {
+        reads += 1;
+        if (reads === 1) {
+          throw new GatewayPayloadError('INVALID_PAYLOAD', {
+            reason: 'steam-session-unavailable',
+          });
+        }
+        return {
+          complete: true,
+          trades: [tradeAt('7001', 1_776_816_000)],
+          icons: {},
+          nameColors: {},
+          hasMore: false,
+          totalTrades: 1,
+        };
+      },
+      async refreshAccessToken() {
+        refreshes += 1;
+      },
+    }),
+    createSyncRunId: () => 'sync_run_trade_recovery_01234567',
+    now: () => 1_776_816_000_000,
+  });
+
+  assert.equal(reads, 2);
+  assert.equal(refreshes, 1);
+  assert.equal(collected.summary.trades, 1);
+  assert.deepEqual(collected.summary.failedSources, []);
 });
 
 test('portfolio asset identity permits the same asset ID in contexts 2 and 16 only', () => {

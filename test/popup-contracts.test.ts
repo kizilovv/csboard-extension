@@ -77,6 +77,24 @@ test('accepted-offer enrichment follows trade-history consent and stays out of p
   assert.doesNotMatch(popup, /id="source-trade-offers-status"/);
 });
 
+test('portfolio sync diagnostics distinguish auth, Steam availability, and partial history', () => {
+  const source = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');
+
+  for (const code of [
+    'STEAM_SESSION_REQUIRED',
+    'STEAM_ACCOUNT_MISMATCH',
+    'STEAM_RATE_LIMITED',
+    'STEAM_UNAVAILABLE',
+    'STEAM_RESPONSE_INVALID',
+    'TRADE_HISTORY_TRUNCATED',
+  ]) {
+    assert.match(source, new RegExp(`${code}:`));
+  }
+  assert.match(source, /Trade History was partially synced/);
+  assert.match(source, /newest records were uploaded; older records were not included in this run/);
+  assert.match(source, /warningCodes\.has\('OVERSIZED_RECORDS_DROPPED'\)/);
+});
+
 test('P2P listing UI requires distinct review and confirm clicks and exposes ineligibility reasons', () => {
   const html = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
   const source = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');

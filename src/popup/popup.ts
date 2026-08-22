@@ -376,7 +376,17 @@ function showNotice(message: string, kind: NoticeKind = 'info'): void {
 }
 
 function humanizeCode(code: string): string {
-  return code
+  const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '').toUpperCase();
+  const exactCopy: Readonly<Record<string, string>> = {
+    STEAM_SESSION_REQUIRED: 'sign in to Steam or open a signed-in Steam tab',
+    STEAM_ACCOUNT_MISMATCH: 'active Steam account does not match the paired account',
+    STEAM_RATE_LIMITED: 'Steam rate limit reached; retry later',
+    STEAM_UNAVAILABLE: 'Steam is temporarily unavailable',
+    STEAM_RESPONSE_INVALID: 'Steam returned an unsupported response',
+    STEAM_READ_FAILED: 'Steam read failed',
+    TRADE_HISTORY_TRUNCATED: 'trade history partially synced; newest records only',
+  };
+  return exactCopy[safeCode] ?? safeCode
     .replace(/[^A-Za-z0-9_-]/g, '')
     .replace(/[_-]+/g, ' ')
     .toLowerCase();
@@ -786,11 +796,17 @@ async function runManualSync(): Promise<void> {
       .filter((source) => source.enabled && source.state === 'error');
     const warnedSources = Object.values(portfolioStatus.sources)
       .filter((source) => source.enabled && source.warningCode);
+    const warningCodes = new Set(warnedSources.map((source) => source.warningCode));
+    const warningMessage = warningCodes.has('TRADE_HISTORY_TRUNCATED')
+      ? 'Trade History was partially synced. The newest records were uploaded; older records were not included in this run.'
+      : warningCodes.has('OVERSIZED_RECORDS_DROPPED')
+        ? 'Sync finished safely, but one or more oversized records were omitted.'
+        : 'Sync finished safely with a source warning. Review the source status for details.';
     showNotice(
       skippedSources.length > 0
         ? 'Sync finished, but one or more Steam sources were unavailable. Successful sources were uploaded safely.'
         : warnedSources.length > 0
-          ? 'Sync finished safely, but one or more oversized records were omitted.'
+          ? warningMessage
           : 'Manual portfolio sync finished.',
       skippedSources.length > 0 || warnedSources.length > 0 ? 'warning' : 'success',
     );
