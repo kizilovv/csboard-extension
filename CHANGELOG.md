@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.7 — Pairing and sync hotfix
+
+- Omit Steam's zero-value offer timestamp sentinels so valid accepted offers
+  cannot fail the portfolio payload validator before upload.
+- Open pairing help on the exact CSFolder extension-import tab and reset stale
+  upload consent after pair or unpair, keeping every source off until the user
+  enables it again.
+- Gate the Store archive on a real-browser pair, enable, sync, unpair, re-pair,
+  sync and P2P popup smoke test.
+
 ## 1.1.6 — Sync reliability hotfix
 
 - Restored manual and hourly portfolio sync when the extension worker starts

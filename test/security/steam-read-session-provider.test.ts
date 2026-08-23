@@ -291,6 +291,41 @@ test('accepted Steam offers use post-trade ids only for received items', async (
   });
 });
 
+test('accepted Steam offers omit zero timestamp sentinels and preserve positive epoch seconds', async () => {
+  const offers = [
+    { ...rawOffer(31, 1_700_000_031), expiration_time: 0, escrow_end_date: 0 },
+    { ...rawOffer(32, 1_700_000_032), expiration_time: '0', escrow_end_date: '0' },
+    {
+      ...rawOffer(33, 1_700_000_033),
+      expiration_time: 1_800_000_032,
+      escrow_end_date: 1_800_000_033,
+    },
+  ];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('https://steamcommunity.com/')) return tokenPage(url);
+    assert.match(url, /IEconService\/GetTradeOffers\/v1/);
+    return new Response(JSON.stringify({
+      response: {
+        descriptions: [],
+        trade_offers_received: offers,
+        trade_offers_sent: [],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const result = await createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl })
+    .readTradeOffers();
+  const byOfferId = new Map(result.offers.map((offer) => [offer.offerId, offer]));
+
+  assert.equal(Object.hasOwn(byOfferId.get('31') ?? {}, 'escrowEndAt'), false);
+  assert.equal(Object.hasOwn(byOfferId.get('32') ?? {}, 'escrowEndAt'), false);
+  assert.equal(byOfferId.get('33')?.escrowEndAt, 1_800_000_033);
+  assert.equal(Object.hasOwn(byOfferId.get('31') ?? {}, 'expiresAt'), false);
+  assert.equal(Object.hasOwn(byOfferId.get('32') ?? {}, 'expiresAt'), false);
+  assert.equal(byOfferId.get('33')?.expiresAt, 1_800_000_032);
+});
+
 test('Steam offer read returns the deterministic newest 1,000 with a safe warning', async () => {
   const allOffers = Array.from(
     { length: MAX_PORTFOLIO_OFFERS_PER_RUN + 2 },

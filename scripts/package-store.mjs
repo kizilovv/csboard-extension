@@ -88,6 +88,16 @@ execFileSync(process.execPath, [
   '--test',
   resolve(root, 'test-artifact/external-router.test.mjs'),
 ], { cwd: root, stdio: 'inherit' });
+if (isStore) {
+  // A store archive is only emitted after the built popup proves the complete
+  // pair -> sync -> unpair -> re-pair lifecycle in a real browser. The smoke
+  // runner keeps Playwright and Chrome paths configurable for release hosts.
+  execFileSync('npm', ['run', 'test:e2e:popup'], {
+    cwd: root,
+    stdio: 'inherit',
+    env: process.env,
+  });
+}
 
 function lexicalCompare(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;

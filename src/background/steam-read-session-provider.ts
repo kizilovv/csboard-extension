@@ -202,6 +202,11 @@ function optionalInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
+function optionalPositiveTimestamp(value: unknown): number | undefined {
+  const timestamp = optionalInteger(value);
+  return timestamp !== undefined && timestamp > 0 ? timestamp : undefined;
+}
+
 function buildAssetPropertiesMap(value: unknown): Map<string, Record<string, unknown>> {
   const properties = new Map<string, Record<string, unknown>>();
   if (Array.isArray(value)) {
@@ -813,6 +818,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       }
       const completedTradeId = optionalString(offer['tradeid'], 32);
       const marketplaceHint = marketplaceHintFromOfferMessage(offer['message']);
+      const expiresAt = optionalPositiveTimestamp(offer['expiration_time']);
+      const escrowEndAt = optionalPositiveTimestamp(offer['escrow_end_date']);
       return [{
         offerId: requiredDigits(offer['tradeofferid'], `${path}[${index}].tradeofferid`),
         direction,
@@ -830,12 +837,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           ),
         } : {}),
         ...(marketplaceHint !== undefined ? { marketplaceHint } : {}),
-        ...(optionalInteger(offer['expiration_time']) !== undefined ? {
-          expiresAt: optionalInteger(offer['expiration_time']),
-        } : {}),
-        ...(optionalInteger(offer['escrow_end_date']) !== undefined ? {
-          escrowEndAt: optionalInteger(offer['escrow_end_date']),
-        } : {}),
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+        ...(escrowEndAt !== undefined ? { escrowEndAt } : {}),
         itemsToGive: normalizeTradeItems(
           offer['items_to_give'],
           descriptions,

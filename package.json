@@ -1,6 +1,6 @@
 {
   "name": "csboard-extension-prod",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "CSBOARD trading helper with price overlays, user-confirmed Steam Market tools, and opt-in encrypted portfolio sync.",
   "license": "MIT",
   "private": true,
@@ -16,6 +16,7 @@
     "package:store": "node scripts/package-store.mjs --store",
     "audit:capabilities": "node scripts/audit-capabilities.mjs",
     "test:artifact": "node --test test-artifact/**/*.test.mjs",
+    "test:e2e:popup": "node scripts/e2e-popup-smoke.mjs",
     "test:e2e:csfloat": "node scripts/e2e-csfloat-metadata-smoke.mjs",
     "test:e2e:buff": "node scripts/e2e-buff-smoke.mjs",
     "preview": "vite preview"

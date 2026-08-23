@@ -9,13 +9,22 @@ const popupSource = readFileSync(new URL('../src/popup/popup.ts', import.meta.ur
 test('portfolio pairing UI names CSFolder as the one-time-code authority', () => {
   assert.match(popupHtml, /Secure CSFolder portfolio sync/);
   assert.match(popupHtml, /Enter code from CSFolder/);
-  assert.match(popupHtml, /https:\/\/csfolder\.com\/portfolio\?/);
   assert.doesNotMatch(popupHtml, /Enter code from CSBOARD/);
 
   assert.match(popupSource, /one-time code from CSFolder/);
   assert.match(popupSource, /Unpair this browser from CSFolder\?/);
   assert.match(popupSource, /\^CSF-\[2-9A-HJ-NP-Z\]/);
   assert.doesNotMatch(popupSource, /one-time code from CSBOARD/);
+});
+
+test('unpaired help CTA opens the CSFolder extension import tab directly', () => {
+  const href = /<a class="text-button" href="([^"]+)"[^>]*>CSFolder portfolio<\/a>/
+    .exec(popupHtml)?.[1];
+
+  assert.equal(
+    href,
+    'https://csfolder.com/portfolio/import?tab=csboard-extension&amp;utm_source=csboard_extension&amp;utm_medium=pairing',
+  );
 });
 
 test('gateway accepts only the exact CSFolder human-safe pairing-code contract', () => {

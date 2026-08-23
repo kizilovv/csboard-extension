@@ -12,7 +12,9 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+
+const playwrightImport = process.env.CSBOARD_PLAYWRIGHT_IMPORT || 'playwright';
+const { chromium } = await import(playwrightImport);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, '..');
@@ -20,6 +22,7 @@ const sourceRoot = join(projectRoot, 'src');
 const popupBuildDir = join(projectRoot, 'build', 'popup');
 const popupFiles = ['popup.html', 'popup.js', 'popup.css'];
 const screenshotPath = join(projectRoot, 'artifacts', 'e2e', 'popup-p2p-smoke.png');
+const unpairedScreenshotPath = join(projectRoot, 'artifacts', 'e2e', 'popup-repairing-smoke.png');
 const failureScreenshotPath = join(projectRoot, 'artifacts', 'e2e', 'popup-p2p-smoke-failure.png');
 
 const fixture = Object.freeze({
@@ -28,6 +31,7 @@ const fixture = Object.freeze({
   listingId: 'p2p_listing_e2e_001',
   marketHashName: '★ Karambit | Doppler (Factory New)',
   pairingCode: 'CSF-2345-6789-ABCD-EFGH',
+  rePairingCode: 'CSF-3456-789A-BCDE-FGHJ',
   priceInput: '1234.56',
   priceMinor: 123_456,
   reviewId: 'review_e2e_00000001',
@@ -110,7 +114,13 @@ class PopupPage {
     this.pairForm = page.locator('#pair-form');
     this.pairCode = page.locator('#pairing-code-input');
     this.pairButton = page.locator('#pair-device-btn');
+    this.pairingHelp = page.locator('#pair-form a.text-button');
     this.portfolioSummary = page.locator('#portfolio-summary');
+    this.portfolioToggle = page.locator('#portfolio-sync-toggle');
+    this.inventorySource = page.locator('#source-inventory');
+    this.tradeHistorySource = page.locator('#source-trade-history');
+    this.syncPortfolioButton = page.locator('#sync-portfolio-btn');
+    this.unpairButton = page.locator('#unpair-device-btn');
     this.assetSelect = page.locator('#p2p-asset-select');
     this.price = page.locator('#p2p-price-input');
     this.reviewButton = page.locator('#review-p2p-btn');
@@ -139,11 +149,46 @@ class PopupPage {
     await this.pairForm.waitFor({ state: 'visible' });
   }
 
-  async pair() {
-    await this.pairCode.fill(fixture.pairingCode);
+  async pair(code = fixture.pairingCode) {
+    await this.pairCode.fill(code);
     await this.pairButton.click();
     await this.page.waitForFunction(
       () => document.querySelector('#portfolio-summary')?.textContent?.startsWith('Paired.'),
+    );
+  }
+
+  async enablePortfolioSources() {
+    await this.portfolioToggle.check();
+    await this.page.waitForFunction(() => {
+      const input = document.querySelector('#source-inventory');
+      return input instanceof HTMLInputElement && !input.disabled;
+    });
+    await this.inventorySource.check();
+    await this.page.waitForFunction(() => {
+      const input = document.querySelector('#source-trade-history');
+      return input instanceof HTMLInputElement && !input.disabled;
+    });
+    await this.tradeHistorySource.check();
+    await this.page.waitForFunction(() => {
+      const button = document.querySelector('#sync-portfolio-btn');
+      return button instanceof HTMLButtonElement && !button.disabled;
+    });
+  }
+
+  async syncPortfolio(expectedRunCount) {
+    await this.syncPortfolioButton.click();
+    await this.page.waitForFunction(
+      (runCount) => window.__CSBOARD_E2E__?.state.syncRunCount === runCount &&
+        document.querySelector('#popup-notice')?.textContent === 'Manual portfolio sync finished.',
+      expectedRunCount,
+    );
+  }
+
+  async unpair() {
+    await this.unpairButton.click();
+    await this.pairForm.waitFor({ state: 'visible' });
+    await this.page.waitForFunction(
+      () => document.querySelector('#portfolio-summary')?.textContent?.startsWith('Pair with a one-time code'),
     );
   }
 
@@ -177,22 +222,40 @@ async function installChromeStub(context) {
       listed: false,
       listingId: null,
       paired: false,
+      lastAttemptedAt: null,
+      lastSuccessfulAt: null,
+      syncRunCount: 0,
     };
 
-    const settings = {
+    let settings = {
       schemaVersion: 2,
       currency: 'USD',
       priceSource: 'buff163',
       followCsboardSettings: true,
       showCsboardPricesOnCsfloat: true,
       showBetterBuffOnBuff: false,
-      portfolioSyncEnabled: false,
+      // Model stale consent left behind by an interrupted/failed unpair. The
+      // production worker clears it before every successful new pairing.
+      portfolioSyncEnabled: true,
       portfolioSources: {
-        inventory: false,
+        inventory: true,
         tradeOffers: false,
-        tradeHistory: false,
+        tradeHistory: true,
         marketHistory: false,
       },
+    };
+
+    const sourceStatus = (source) => {
+      const enabled = settings.portfolioSources[source] === true;
+      return {
+        enabled,
+        state: enabled ? (state.syncRunCount > 0 ? 'success' : 'idle') : 'disabled',
+        records: enabled && state.syncRunCount > 0
+          ? (source === 'inventory' ? 300 : 40)
+          : 0,
+        lastAttemptedAt: enabled ? state.lastAttemptedAt : null,
+        lastSuccessfulAt: enabled ? state.lastSuccessfulAt : null,
+      };
     };
 
     const portfolioStatus = () => ({
@@ -200,13 +263,13 @@ async function installChromeStub(context) {
       steamId: state.paired ? data.steamId : null,
       paused: false,
       sources: {
-        inventory: { enabled: false, state: 'disabled' },
+        inventory: sourceStatus('inventory'),
         tradeOffers: { enabled: false, state: 'disabled' },
-        tradeHistory: { enabled: false, state: 'disabled' },
+        tradeHistory: sourceStatus('tradeHistory'),
         marketHistory: { enabled: false, state: 'disabled' },
       },
-      lastAttemptedAt: null,
-      lastSuccessfulAt: null,
+      lastAttemptedAt: state.lastAttemptedAt,
+      lastSuccessfulAt: state.lastSuccessfulAt,
       queuedRecords: 0,
       retryAt: null,
     });
@@ -249,9 +312,16 @@ async function installChromeStub(context) {
             sync: { state: 'success', lastSyncedAt: Date.now() - 30_000 },
           };
         case 'UPDATE_EXTENSION_SETTINGS':
+          settings = {
+            ...settings,
+            ...(message.data?.patch ?? {}),
+            portfolioSources: message.data?.patch?.portfolioSources
+              ? { ...settings.portfolioSources, ...message.data.patch.portfolioSources }
+              : settings.portfolioSources,
+          };
           return {
             success: true,
-            settings: { ...settings, ...(message.data?.patch ?? {}) },
+            settings,
             sync: { state: 'success', lastSyncedAt: Date.now() },
           };
         case 'GET_PRICE_ENGINE_STATUS':
@@ -267,14 +337,47 @@ async function installChromeStub(context) {
         case 'GET_PORTFOLIO_SYNC_STATUS':
           return { status: portfolioStatus() };
         case 'PAIR_DEVICE':
-          if (message.data?.code !== data.pairingCode) return { error: 'PAIR_CODE_MISMATCH' };
+          if (![data.pairingCode, data.rePairingCode].includes(message.data?.code)) {
+            return { error: 'PAIR_CODE_MISMATCH' };
+          }
+          settings = {
+            ...settings,
+            portfolioSyncEnabled: false,
+            portfolioSources: {
+              inventory: false,
+              tradeOffers: false,
+              tradeHistory: false,
+              marketHistory: false,
+            },
+          };
           state.paired = true;
           return { status: portfolioStatus() };
         case 'UNPAIR_DEVICE':
           state.paired = false;
+          state.lastAttemptedAt = null;
+          state.lastSuccessfulAt = null;
+          state.syncRunCount = 0;
+          settings = {
+            ...settings,
+            portfolioSyncEnabled: false,
+            portfolioSources: {
+              inventory: false,
+              tradeOffers: false,
+              tradeHistory: false,
+              marketHistory: false,
+            },
+          };
           return { status: portfolioStatus() };
-        case 'RUN_MANUAL_SYNC':
+        case 'RUN_MANUAL_SYNC': {
+          if (!state.paired || !settings.portfolioSyncEnabled ||
+              !Object.values(settings.portfolioSources).some(Boolean)) {
+            return { error: 'E2E_SYNC_PRECONDITION_FAILED' };
+          }
+          state.syncRunCount += 1;
+          state.lastAttemptedAt = Date.now();
+          state.lastSuccessfulAt = state.lastAttemptedAt;
           return { status: portfolioStatus() };
+        }
         case 'GET_P2P_ELIGIBLE_ASSETS':
           return eligibleAssets();
         case 'PREPARE_P2P_LISTING': {
@@ -375,7 +478,12 @@ async function main() {
   const builtPopupDocument = inlineBuiltPopup();
   mkdirSync(dirname(screenshotPath), { recursive: true });
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.CSBOARD_CHROMIUM_EXECUTABLE
+      ? { executablePath: process.env.CSBOARD_CHROMIUM_EXECUTABLE }
+      : {}),
+  });
   const context = await browser.newContext({ viewport: { width: 520, height: 1_000 } });
   await installChromeStub(context);
   const page = await context.newPage();
@@ -404,9 +512,17 @@ async function main() {
     assert.equal(await popup.currency.inputValue(), 'USD');
     assert.equal(await popup.priceSource.inputValue(), 'buff163');
     assert.equal(await popup.betterBuff.isChecked(), false);
+    assert.equal(await popup.portfolioToggle.isChecked(), true, 'fixture must start with stale consent');
+    assert.equal(await popup.inventorySource.isChecked(), true, 'fixture must start with a stale source');
+    assert.equal(await popup.tradeHistorySource.isChecked(), true, 'fixture must start with a stale source');
     assert.equal((await popup.priceCount.textContent())?.trim(), 'Price data: 42');
     assert.equal(await popup.assetSelect.inputValue(), fixture.assetId);
     assert.match((await popup.assetSelect.locator('option:checked').textContent()) ?? '', /Karambit/u);
+    assert.equal(
+      await popup.pairingHelp.getAttribute('href'),
+      'https://csfolder.com/portfolio/import?tab=csboard-extension&utm_source=csboard_extension&utm_medium=pairing',
+      'Unpaired users must land on the CSFolder extension pairing tab',
+    );
 
     await popup.betterBuff.click();
     await page.waitForFunction(() =>
@@ -416,7 +532,32 @@ async function main() {
     assert.equal(await popup.betterBuff.isChecked(), true);
 
     await popup.pair();
-    assert.match((await popup.portfolioSummary.textContent()) ?? '', /^Paired\./u);
+    assert.equal(await popup.portfolioToggle.isChecked(), false, 'pairing must clear stale upload consent');
+    assert.equal(await popup.inventorySource.isChecked(), false, 'pairing must clear stale sources');
+    assert.equal(await popup.tradeHistorySource.isChecked(), false, 'pairing must clear stale sources');
+    assert.equal(
+      (await popup.portfolioSummary.textContent())?.trim(),
+      'Paired. Portfolio uploads remain off until you enable them.',
+    );
+    await popup.enablePortfolioSources();
+    await popup.syncPortfolio(1);
+    assert.match((await page.locator('#source-inventory-status').textContent()) ?? '', /^Synced · 300 records$/u);
+    assert.match((await page.locator('#source-trade-history-status').textContent()) ?? '', /^Synced · 40 records$/u);
+
+    await popup.unpair();
+    assert.equal(await popup.portfolioToggle.isChecked(), false);
+    assert.equal(await popup.inventorySource.isChecked(), false);
+    assert.equal(await popup.tradeHistorySource.isChecked(), false);
+    assert.equal(
+      await popup.pairingHelp.getAttribute('href'),
+      'https://csfolder.com/portfolio/import?tab=csboard-extension&utm_source=csboard_extension&utm_medium=pairing',
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: unpairedScreenshotPath, fullPage: true });
+
+    await popup.pair(fixture.rePairingCode);
+    await popup.enablePortfolioSources();
+    await popup.syncPortfolio(1);
 
     await popup.requestReview();
     assert.equal((await popup.reviewAction.textContent())?.trim(), 'Publish listing');
@@ -427,8 +568,23 @@ async function main() {
     const callsBeforeConfirm = await page.evaluate(() => window.__CSBOARD_E2E__.state.calls);
     assert.deepEqual(
       callsBeforeConfirm.filter((call) => call.type === 'PAIR_DEVICE'),
-      [{ type: 'PAIR_DEVICE', version: 1, data: { code: fixture.pairingCode } }],
+      [
+        { type: 'PAIR_DEVICE', version: 1, data: { code: fixture.pairingCode } },
+        { type: 'PAIR_DEVICE', version: 1, data: { code: fixture.rePairingCode } },
+      ],
     );
+    assert.equal(callsBeforeConfirm.filter((call) => call.type === 'UNPAIR_DEVICE').length, 1);
+    assert.equal(callsBeforeConfirm.filter((call) => call.type === 'RUN_MANUAL_SYNC').length, 2);
+    const lifecycleCalls = callsBeforeConfirm
+      .filter((call) => ['PAIR_DEVICE', 'RUN_MANUAL_SYNC', 'UNPAIR_DEVICE'].includes(call.type))
+      .map((call) => call.type);
+    assert.deepEqual(lifecycleCalls, [
+      'PAIR_DEVICE',
+      'RUN_MANUAL_SYNC',
+      'UNPAIR_DEVICE',
+      'PAIR_DEVICE',
+      'RUN_MANUAL_SYNC',
+    ]);
     assert.deepEqual(
       callsBeforeConfirm.filter((call) =>
         call.type === 'UPDATE_EXTENSION_SETTINGS' &&
@@ -484,9 +640,11 @@ async function main() {
     rmSync(failureScreenshotPath, { force: true });
     passed = true;
     process.stdout.write([
-      'PASS popup P2P smoke',
+      'PASS popup pairing, sync and P2P smoke',
       `artifact=${screenshotPath}`,
+      `unpairedArtifact=${unpairedScreenshotPath}`,
       `messages=${callsAfterConfirm.length}`,
+      'pairingLifecycle=pair-sync-unpair-repair-sync',
       'externalRequests=0',
     ].join('\n') + '\n');
   } finally {

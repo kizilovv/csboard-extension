@@ -724,6 +724,14 @@ async function loadPortfolioStatus(): Promise<void> {
   renderPortfolio();
 }
 
+function resetLocalPortfolioConsent(): void {
+  settings = {
+    ...settings,
+    portfolioSyncEnabled: false,
+    portfolioSources: { ...DEFAULT_POPUP_SETTINGS.portfolioSources },
+  };
+}
+
 async function pairDevice(code: string): Promise<void> {
   portfolioBusy = true;
   clearNotice();
@@ -738,12 +746,17 @@ async function pairDevice(code: string): Promise<void> {
       throw new Error('Invalid pairing response');
     }
     portfolioStatus = normalizePortfolioStatus(response.status, portfolioStatus);
+    // The service worker persists the same fail-closed baseline before it
+    // registers a new device. Mirror it immediately so a popup that loaded
+    // stale pre-pair consent cannot render uploads as enabled.
+    resetLocalPortfolioConsent();
     element<HTMLInputElement>('#pairing-code-input').value = '';
     showNotice('Device paired with CSFolder. Portfolio uploads are still off until you enable them.', 'success');
   } catch (error) {
     showNotice(pairingFailureNotice(error), 'error');
   } finally {
     portfolioBusy = false;
+    renderSettings();
     renderPortfolio();
   }
 }
@@ -764,11 +777,7 @@ async function unpairDevice(): Promise<void> {
       throw new Error('Invalid unpair response');
     }
     portfolioStatus = normalizePortfolioStatus(response.status, DEFAULT_PORTFOLIO_STATUS);
-    settings = {
-      ...settings,
-      portfolioSyncEnabled: false,
-      portfolioSources: { ...DEFAULT_POPUP_SETTINGS.portfolioSources },
-    };
+    resetLocalPortfolioConsent();
     showNotice('Device unpaired and portfolio uploads disabled.', 'success');
   } catch {
     showNotice('Could not unpair this device. Nothing was deleted locally.', 'error');
