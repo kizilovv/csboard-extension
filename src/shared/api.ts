@@ -268,6 +268,31 @@ export async function getAuthStatus(): Promise<AuthState> {
   return { isLoggedIn: false };
 }
 
+/**
+ * `/auth/me`, with "signed out" kept apart from "we could not ask".
+ *
+ * `getAuthStatus()` above flattens both into `isLoggedIn: false`, which is the
+ * right answer for a popup that only has to decide what to render. It is the
+ * wrong answer for the direct sync path, whose refusal becomes a sentence the
+ * seller acts on: telling someone to sign in when the browser is simply
+ * offline sends them to fix an account that was never broken.
+ */
+export type CsboardSyncAccountRead =
+  | { readonly state: 'signed-in'; readonly steamId: string | null }
+  | { readonly state: 'signed-out' }
+  | { readonly state: 'unreachable' };
+
+export async function readAccountForSync(): Promise<CsboardSyncAccountRead> {
+  const result = await apiFetch<unknown>('/auth/me');
+  if (result.ok) {
+    const user = normalizeAuthMePayload(result.value);
+    // A 200 we cannot parse is not a signed-out user; it is a deployment we do
+    // not understand, and guessing either way would be a lie.
+    return user ? { state: 'signed-in', steamId: user.steamId } : { state: 'unreachable' };
+  }
+  return result.error.code === 'AUTH_EXPIRED' ? { state: 'signed-out' } : { state: 'unreachable' };
+}
+
 export async function logout(): Promise<void> {
   await apiFetch<void>('/auth/logout', { method: 'POST' });
 }

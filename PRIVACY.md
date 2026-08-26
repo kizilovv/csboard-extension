@@ -77,20 +77,26 @@ CSBOARD gateway logs are limited to bounded request identifiers, a shortened dev
 
 Neither a CSBOARD webpage nor the protected portfolio gateway can invoke Steam selling, offer creation, acceptance, confirmation or cancellation.
 
-## CSBOARD P2P listing publication
+## CSBOARD inventory refresh requests
 
-The popup may show server-evaluated eligibility for assets already synchronized
-to the user's CSBOARD account. After two separate user actions—requesting an
-exact review and confirming it—the extension sends only the operational asset
-ID, asset revision, listing ID when unpublishing, USD minor-unit asking price,
-terms version and a random idempotency key to the normal cookie-authenticated
-CSBOARD listing API. The short-lived intent remains in service-worker memory.
+Listing an item on CSBOARD requires an inventory snapshot the server accepted
+less than five minutes ago, and only a client holding the user's Steam session
+can produce one. `https://csboard.com` and `https://csboard.trade` may
+therefore send two exact, size-bounded messages: one asking the extension to
+run an inventory sync now, and one asking whether a run is in progress. The
+answers are a "started" flag and, for the second, only whether this browser is
+paired and whether a run is idle, running or failed.
 
-This version can publish or unpublish a listing only. It cannot buy, reserve
-funds, create an order, settle money or perform a Steam trade. Those execution
-routes are absent from the version 1.1 extension contract. A lost network
-response is retried only with the same reviewed intent and idempotency key, so
-the extension does not create a second listing to resolve an ambiguous result.
+These requests cannot pair or unpair a device, change which sources are
+enabled, or switch uploads on: an install that is unpaired or has uploads off
+refuses with a status code and syncs nothing. No Steam data is returned to the
+webpage. The snapshot itself travels only over the encrypted gateway described
+above, and the site learns the outcome by re-reading its own server.
+
+Listing publication itself is not part of this extension. Earlier 1.1 builds
+carried a popup panel that could publish or unpublish a CSBOARD listing; it was
+removed in 1.1.6, along with its listing API access. The extension can no
+longer create, modify, buy, reserve, settle or cancel a listing or an order.
 
 ## Storage and control
 
@@ -100,13 +106,13 @@ The popup lets the user disable CSBOARD-settings sync, disable the CSFloat compa
 
 ## Network destinations
 
-- `https://csboard.com` and `https://csboard.trade`: price/rate feeds, optional account settings, encrypted gateway pairing/ingestion, device revoke/status and user-reviewed P2P listing publication.
+- `https://csboard.com` and `https://csboard.trade`: price/rate feeds, optional account settings, encrypted gateway pairing/ingestion and device revoke/status.
 - `https://csfolder.com`: the user-opened portfolio page generates the one-time pairing code and, only after the user's connect click, may send the exact bounded activation message to the installed extension. The extension has no CSFolder host permission and makes no direct authenticated CSFolder request.
 - `https://steamcommunity.com` and `https://api.steampowered.com`: the visible Steam feature, fixed reads and direct user-confirmed Steam actions.
 - `https://csfloat.com`: overlays on the marketplace page, public metadata and user-opened search links.
 - `https://buff.163.com` and its HTTPS subdomains: opt-in, local-only marketplace display enhancements and user-opened links. No Buff response is sent to CSBOARD.
 
-No other origin may send messages to the extension. CSBOARD origins can request only extension version/capability status. The CSFolder origin can request only the single-use pairing + fixed-source activation described above. Neither surface exposes login state, inventory data, settings, Steam-session status or any Steam write.
+No other origin may send messages to the extension. CSBOARD origins can request only extension version/capability status, an inventory sync run, and that run's state. The CSFolder origin can request only the single-use pairing + fixed-source activation described above. Neither surface exposes login state, inventory data, settings or any Steam write.
 
 ## Permissions
 

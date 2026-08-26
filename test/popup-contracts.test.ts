@@ -77,16 +77,47 @@ test('accepted-offer enrichment follows trade-history consent and stays out of p
   assert.doesNotMatch(popup, /id="source-trade-offers-status"/);
 });
 
-test('P2P listing UI requires distinct review and confirm clicks and exposes ineligibility reasons', () => {
-  const html = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
+test('portfolio sync diagnostics distinguish auth, Steam availability, and partial history', () => {
   const source = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');
 
-  assert.match(html, /id="p2p-asset-select"/);
-  assert.match(html, /id="p2p-price-input"/);
-  assert.match(html, /id="p2p-reasons"/);
-  assert.match(html, /id="review-p2p-btn"/);
-  assert.match(html, /id="confirm-p2p-btn"/);
-  assert.match(source, /type: 'PREPARE_P2P_LISTING'/);
-  assert.match(source, /type: 'CONFIRM_P2P_LISTING'/);
-  assert.doesNotMatch(source, /P2P_(?:BUY|ORDER|STEAM)/);
+  for (const code of [
+    'STEAM_SESSION_REQUIRED',
+    'STEAM_ACCOUNT_MISMATCH',
+    'STEAM_RATE_LIMITED',
+    'STEAM_UNAVAILABLE',
+    'STEAM_RESPONSE_INVALID',
+    'TRADE_HISTORY_TRUNCATED',
+  ]) {
+    assert.match(source, new RegExp(`${code}:`));
+  }
+  assert.match(source, /Trade History was partially synced/);
+  assert.match(source, /newest records were uploaded; older records were not included in this run/);
+  assert.match(source, /warningCodes\.has\('OVERSIZED_RECORDS_DROPPED'\)/);
+});
+
+test('the popup no longer offers P2P listing: publishing lives on the site and in the app', () => {
+  const html = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');
+  const contracts = readFileSync(new URL('../src/popup/contracts.ts', import.meta.url), 'utf8');
+  const worker = readFileSync(
+    new URL('../src/background/service-worker.ts', import.meta.url),
+    'utf8',
+  );
+
+  // The panel, its controls and its message types are gone together. A popup
+  // that still asked for eligibility while the section was deleted would burn
+  // a request on every open and log a missing-element error.
+  for (const marker of [/p2p-asset-select/, /p2p-price-input/, /review-p2p-btn/, /confirm-p2p-btn/]) {
+    assert.doesNotMatch(html, marker);
+  }
+  for (const artifact of [source, contracts, worker]) {
+    assert.doesNotMatch(
+      artifact,
+      /GET_P2P_ELIGIBLE_ASSETS|PREPARE_P2P_LISTING|CONFIRM_P2P_LISTING|CANCEL_P2P_LISTING_REVIEW/,
+    );
+  }
+
+  // The sync section is what the popup keeps, and it must be untouched.
+  assert.match(html, /id="sync-portfolio-btn"/);
+  assert.match(source, /type: 'RUN_MANUAL_SYNC'/);
 });

@@ -6,8 +6,6 @@
 
 export const POPUP_SETTINGS_SCHEMA_VERSION = 2 as const;
 export const POPUP_PORTFOLIO_PROTOCOL_VERSION = 1 as const;
-export const POPUP_P2P_PROTOCOL_VERSION = 1 as const;
-export const P2P_LISTING_TERMS_VERSION = 'p2p-listing-v1' as const;
 
 export const SUPPORTED_CURRENCIES = [
   'USD',
@@ -152,60 +150,6 @@ export const DEFAULT_PORTFOLIO_STATUS: PortfolioSyncStatus = {
   retryAt: null,
 };
 
-export type P2PListingAction = 'create' | 'unpublish';
-
-export interface P2PEligibilityReason {
-  readonly code: string;
-  readonly message: string;
-}
-
-export interface P2PEligibleAsset {
-  readonly operationalAssetId: string;
-  readonly assetRevision: string;
-  readonly marketHashName: string;
-  readonly contextId: '2' | '16';
-  readonly eligibility: boolean;
-  readonly reasons: readonly P2PEligibilityReason[];
-  readonly listingId: string | null;
-  readonly listingState: string | null;
-  readonly currency: 'USD';
-  readonly snapshotCompletedAt: string | null;
-}
-
-export interface P2PListingReview {
-  /** Opaque, process-memory-only handle. The backend intent ID is never exposed. */
-  readonly reviewId: string;
-  readonly action: P2PListingAction;
-  readonly operationalAssetId: string;
-  readonly assetRevision: string;
-  readonly marketHashName: string;
-  readonly listingId: string | null;
-  readonly priceMinor: number;
-  readonly currency: 'USD';
-  readonly termsVersion: typeof P2P_LISTING_TERMS_VERSION;
-  readonly expiresAt: number;
-}
-
-export type PrepareP2PListingRequest =
-  | {
-      readonly action: 'create';
-      readonly operationalAssetId: string;
-      readonly assetRevision: string;
-      readonly priceMinor: number;
-    }
-  | {
-      readonly action: 'unpublish';
-      readonly operationalAssetId: string;
-      readonly assetRevision: string;
-      readonly listingId: string;
-    };
-
-export interface P2PListingCommitResult {
-  readonly success: true;
-  readonly action: P2PListingAction;
-  readonly listingId: string;
-}
-
 export type PopupInternalRequest =
   | { type: 'GET_EXTENSION_SETTINGS'; version: 2 }
   | {
@@ -219,11 +163,7 @@ export type PopupInternalRequest =
   | { type: 'GET_PORTFOLIO_SYNC_STATUS'; version: 1 }
   | { type: 'PAIR_DEVICE'; version: 1; data: { code: string } }
   | { type: 'UNPAIR_DEVICE'; version: 1 }
-  | { type: 'RUN_MANUAL_SYNC'; version: 1 }
-  | { type: 'GET_P2P_ELIGIBLE_ASSETS'; version: 1 }
-  | { type: 'PREPARE_P2P_LISTING'; version: 1; data: PrepareP2PListingRequest }
-  | { type: 'CONFIRM_P2P_LISTING'; version: 1; data: { reviewId: string } }
-  | { type: 'CANCEL_P2P_LISTING_REVIEW'; version: 1; data: { reviewId: string } };
+  | { type: 'RUN_MANUAL_SYNC'; version: 1 };
 
 export interface PopupSettingsResponse {
   readonly settings: PopupSettingsV2;
@@ -240,14 +180,6 @@ export interface PortfolioStatusResponse {
   readonly status: PortfolioSyncStatus;
 }
 
-export interface P2PEligibleAssetsResponse {
-  readonly assets: readonly P2PEligibleAsset[];
-}
-
-export interface P2PListingReviewResponse {
-  readonly review: P2PListingReview;
-}
-
 export type PopupInternalResponseMap = {
   GET_EXTENSION_SETTINGS: PopupSettingsResponse;
   UPDATE_EXTENSION_SETTINGS: PopupSettingsUpdateResponse;
@@ -255,10 +187,6 @@ export type PopupInternalResponseMap = {
   PAIR_DEVICE: PortfolioStatusResponse;
   UNPAIR_DEVICE: PortfolioStatusResponse;
   RUN_MANUAL_SYNC: PortfolioStatusResponse;
-  GET_P2P_ELIGIBLE_ASSETS: P2PEligibleAssetsResponse;
-  PREPARE_P2P_LISTING: P2PListingReviewResponse;
-  CONFIRM_P2P_LISTING: P2PListingCommitResult;
-  CANCEL_P2P_LISTING_REVIEW: { readonly success: true };
 };
 
 export type PopupInternalMessageType = PopupInternalRequest['type'];

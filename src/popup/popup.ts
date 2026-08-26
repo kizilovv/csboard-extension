@@ -11,8 +11,6 @@ import { normalizeAvatarUrl, type UserProfile } from '../shared/types';
 import {
   DEFAULT_POPUP_SETTINGS,
   DEFAULT_PORTFOLIO_STATUS,
-  P2P_LISTING_TERMS_VERSION,
-  POPUP_P2P_PROTOCOL_VERSION,
   POPUP_PORTFOLIO_PROTOCOL_VERSION,
   POPUP_SETTINGS_SCHEMA_VERSION,
   isSupportedCurrency,
@@ -21,9 +19,6 @@ import {
   type PopupInternalRequest,
   type PopupResponseFor,
   type PopupSettingsV2,
-  type P2PEligibleAsset,
-  type P2PEligibilityReason,
-  type P2PListingReview,
   type PortfolioSource,
   type PortfolioSourceRunState,
   type PortfolioSourceStatus,
@@ -31,10 +26,6 @@ import {
   type PricePreferenceSyncState,
   type PricePreferenceSyncStatus,
 } from './contracts';
-import {
-  buildP2PAssetOption,
-  p2pAssetOptionsMatch,
-} from './p2p-view-model';
 import { pairingFailureNotice } from './pairing-error-notice';
 
 type NoticeKind = 'info' | 'success' | 'warning' | 'error';
@@ -80,12 +71,6 @@ let settingsContractAvailable = false;
 let portfolioContractAvailable = false;
 let settingsBusy = false;
 let portfolioBusy = false;
-let p2pAssets: readonly P2PEligibleAsset[] = [];
-let p2pAvailable = false;
-let p2pBusy = false;
-let p2pReview: P2PListingReview | null = null;
-let selectedP2PAssetId: string | null = null;
-let p2pSummaryText = 'Checking current P2P eligibility…';
 let noticeTimer: number | null = null;
 
 function element<T extends Element>(selector: string): T {
@@ -276,80 +261,6 @@ function normalizePortfolioStatus(
   };
 }
 
-function normalizeP2PAsset(value: unknown): P2PEligibleAsset | null {
-  if (!isRecord(value) ||
-      typeof value.operationalAssetId !== 'string' ||
-      !/^[A-Za-z0-9:._-]{1,256}$/.test(value.operationalAssetId) ||
-      typeof value.assetRevision !== 'string' ||
-      !/^[A-Za-z0-9:_-]{16,128}$/.test(value.assetRevision) ||
-      typeof value.marketHashName !== 'string' ||
-      value.marketHashName.length < 1 || value.marketHashName.length > 256 ||
-      (value.contextId !== '2' && value.contextId !== '16') ||
-      typeof value.eligibility !== 'boolean' ||
-      !Array.isArray(value.reasons) ||
-      value.reasons.length > 32 ||
-      value.reasons.some((reason) => !isRecord(reason) ||
-        typeof reason.code !== 'string' || !/^[A-Za-z0-9:_-]{1,96}$/.test(reason.code) ||
-        typeof reason.message !== 'string' ||
-        !/^[^\u0000-\u001f\u007f]{1,240}$/.test(reason.message)) ||
-      value.currency !== 'USD' ||
-      !(value.snapshotCompletedAt === null ||
-        (typeof value.snapshotCompletedAt === 'string' &&
-          Number.isFinite(Date.parse(value.snapshotCompletedAt))))) {
-    return null;
-  }
-  const listingId = value.listingId === null
-    ? null
-    : typeof value.listingId === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(value.listingId)
-      ? value.listingId
-      : undefined;
-  const listingState = value.listingState === null
-    ? null
-    : typeof value.listingState === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(value.listingState)
-      ? value.listingState
-      : undefined;
-  if (listingId === undefined || listingState === undefined ||
-      ((listingId === null) !== (listingState === null)) ||
-      (value.eligibility && (value.snapshotCompletedAt === null || value.reasons.length > 0)) ||
-      (!value.eligibility && value.reasons.length === 0)) {
-    return null;
-  }
-  return {
-    operationalAssetId: value.operationalAssetId,
-    assetRevision: value.assetRevision,
-    marketHashName: value.marketHashName,
-    contextId: value.contextId,
-    eligibility: value.eligibility,
-    reasons: value.reasons.map((reason) => ({
-      code: (reason as Record<string, unknown>).code as string,
-      message: (reason as Record<string, unknown>).message as string,
-    })),
-    listingId,
-    listingState,
-    currency: 'USD',
-    snapshotCompletedAt: value.snapshotCompletedAt,
-  };
-}
-
-function normalizeP2PReview(value: unknown): P2PListingReview | null {
-  if (!isRecord(value) ||
-      typeof value.reviewId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(value.reviewId) ||
-      (value.action !== 'create' && value.action !== 'unpublish') ||
-      typeof value.operationalAssetId !== 'string' ||
-      typeof value.assetRevision !== 'string' ||
-      typeof value.marketHashName !== 'string' ||
-      value.marketHashName.length < 1 || value.marketHashName.length > 256 ||
-      !(value.listingId === null || typeof value.listingId === 'string') ||
-      typeof value.priceMinor !== 'number' || !Number.isSafeInteger(value.priceMinor) ||
-      value.priceMinor < 10 || value.priceMinor > 10_000_000 ||
-      value.currency !== 'USD' || value.termsVersion !== P2P_LISTING_TERMS_VERSION ||
-      typeof value.expiresAt !== 'number' || !Number.isSafeInteger(value.expiresAt) ||
-      value.expiresAt <= Date.now() || value.expiresAt > Date.now() + 2 * 60_000 + 5_000) {
-    return null;
-  }
-  return value as unknown as P2PListingReview;
-}
-
 function clearNotice(): void {
   if (noticeTimer !== null) {
     window.clearTimeout(noticeTimer);
@@ -376,7 +287,17 @@ function showNotice(message: string, kind: NoticeKind = 'info'): void {
 }
 
 function humanizeCode(code: string): string {
-  return code
+  const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '').toUpperCase();
+  const exactCopy: Readonly<Record<string, string>> = {
+    STEAM_SESSION_REQUIRED: 'sign in to Steam or open a signed-in Steam tab',
+    STEAM_ACCOUNT_MISMATCH: 'active Steam account does not match the paired account',
+    STEAM_RATE_LIMITED: 'Steam rate limit reached; retry later',
+    STEAM_UNAVAILABLE: 'Steam is temporarily unavailable',
+    STEAM_RESPONSE_INVALID: 'Steam returned an unsupported response',
+    STEAM_READ_FAILED: 'Steam read failed',
+    TRADE_HISTORY_TRUNCATED: 'trade history partially synced; newest records only',
+  };
+  return exactCopy[safeCode] ?? safeCode
     .replace(/[^A-Za-z0-9_-]/g, '')
     .replace(/[_-]+/g, ' ')
     .toLowerCase();
@@ -786,11 +707,17 @@ async function runManualSync(): Promise<void> {
       .filter((source) => source.enabled && source.state === 'error');
     const warnedSources = Object.values(portfolioStatus.sources)
       .filter((source) => source.enabled && source.warningCode);
+    const warningCodes = new Set(warnedSources.map((source) => source.warningCode));
+    const warningMessage = warningCodes.has('TRADE_HISTORY_TRUNCATED')
+      ? 'Trade History was partially synced. The newest records were uploaded; older records were not included in this run.'
+      : warningCodes.has('OVERSIZED_RECORDS_DROPPED')
+        ? 'Sync finished safely, but one or more oversized records were omitted.'
+        : 'Sync finished safely with a source warning. Review the source status for details.';
     showNotice(
       skippedSources.length > 0
         ? 'Sync finished, but one or more Steam sources were unavailable. Successful sources were uploaded safely.'
         : warnedSources.length > 0
-          ? 'Sync finished safely, but one or more oversized records were omitted.'
+          ? warningMessage
           : 'Manual portfolio sync finished.',
       skippedSources.length > 0 || warnedSources.length > 0 ? 'warning' : 'success',
     );
@@ -813,336 +740,6 @@ async function runManualSync(): Promise<void> {
     portfolioBusy = false;
     renderPortfolio();
   }
-}
-
-function formatUsdMinor(value: number): string {
-  return `$${(value / 100).toFixed(2)} USD`;
-}
-
-function parseUsdMinor(value: string): number | null {
-  const normalized = value.trim();
-  if (!/^(?:0|[1-9]\d{0,5})(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const [whole = '0', fraction = ''] = normalized.split('.');
-  const parsed = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-  return Number.isSafeInteger(parsed) && parsed >= 10 && parsed <= 10_000_000
-    ? parsed
-    : null;
-}
-
-function p2pReasonText(reason: P2PEligibilityReason): string {
-  const reasons: Readonly<Record<string, string>> = {
-    already_listed: 'This asset already has a listing.',
-    steam_account_mismatch: 'The active Steam account does not match the CSBOARD account.',
-    snapshot_missing: 'A complete inventory snapshot (contexts 2 and 16) is required.',
-    snapshot_stale: 'The inventory snapshot is stale. Sync the portfolio again.',
-    snapshot_superseded: 'A newer inventory snapshot exists. Refresh eligibility.',
-    asset_missing: 'This asset is missing from the latest complete inventory snapshot.',
-    asset_revision_unverified: 'CSBOARD cannot verify the current asset revision.',
-    not_tradable: 'Steam currently marks this asset as not tradable.',
-    on_hold: 'This asset is on trade hold.',
-    hold_not_ended: 'The Steam trade hold has not ended yet.',
-    reserved: 'This asset is reserved by another operation.',
-    active_trade: 'This asset is already part of an active trade.',
-    inventory_item_unavailable: 'The synchronized inventory item is unavailable.',
-  };
-  return reasons[reason.code] ?? reason.message;
-}
-
-function p2pFailureText(error: unknown): string {
-  const code = error instanceof Error ? error.message : '';
-  switch (code) {
-    case 'P2P_AUTH_REQUIRED':
-      return 'Sign in to CSBOARD, then refresh. No listing action is available while signed out.';
-    case 'P2P_ASSET_INELIGIBLE':
-      return 'This asset is no longer eligible. Refresh to see the current reason.';
-    case 'P2P_ASSET_REVISION_CHANGED':
-      return 'The asset changed after selection. Refresh and review the latest revision.';
-    case 'P2P_LISTING_UNAVAILABLE':
-      return 'The listing state changed. Refresh before trying again.';
-    case 'P2P_REVIEW_EXPIRED':
-    case 'P2P_REVIEW_NOT_FOUND':
-    case 'P2P_REVIEW_STALE':
-      return 'The review expired or changed. Request a new review.';
-    case 'P2P_RATE_LIMITED':
-      return 'CSBOARD is rate limiting listing actions. Wait, then request a new review.';
-    case 'P2P_REQUEST_REJECTED':
-      return 'CSBOARD rejected this listing action. Refresh eligibility and request a new review.';
-    default:
-      return 'P2P listing service is unavailable. Publishing and unpublishing are blocked.';
-  }
-}
-
-function isTerminalP2PConfirmError(error: unknown): boolean {
-  const code = error instanceof Error ? error.message : '';
-  return code === 'P2P_AUTH_REQUIRED' ||
-    code === 'P2P_LISTING_UNAVAILABLE' ||
-    code === 'P2P_REVIEW_EXPIRED' ||
-    code === 'P2P_REVIEW_NOT_FOUND' ||
-    code === 'P2P_REVIEW_STALE' ||
-    code === 'P2P_RATE_LIMITED' ||
-    code === 'P2P_REQUEST_REJECTED';
-}
-
-function selectedP2PAsset(): P2PEligibleAsset | null {
-  return p2pAssets.find((asset) => asset.operationalAssetId === selectedP2PAssetId) ?? null;
-}
-
-function replaceP2POptions(): void {
-  const select = element<HTMLSelectElement>('#p2p-asset-select');
-  const desiredOptions = p2pAssets.map(buildP2PAssetOption);
-  const currentOptions = Array.from(select.options, (option) => ({
-    value: option.value,
-    label: option.textContent ?? '',
-  }));
-  if (p2pAssetOptionsMatch(currentOptions, desiredOptions)) return;
-
-  const options = desiredOptions.map((model) => {
-    const option = document.createElement('option');
-    option.value = model.value;
-    option.textContent = model.label;
-    return option;
-  });
-  select.replaceChildren(...options);
-}
-
-function renderP2P(): void {
-  const badge = element<HTMLElement>('#p2p-state-badge');
-  const refreshButton = element<HTMLButtonElement>('#refresh-p2p-btn');
-  const select = element<HTMLSelectElement>('#p2p-asset-select');
-  const priceInput = element<HTMLInputElement>('#p2p-price-input');
-  const reviewButton = element<HTMLButtonElement>('#review-p2p-btn');
-  const confirmButton = element<HTMLButtonElement>('#confirm-p2p-btn');
-  const cancelButton = element<HTMLButtonElement>('#cancel-p2p-review-btn');
-
-  badge.classList.remove('neutral', 'good', 'warn', 'bad');
-  badge.textContent = p2pBusy ? 'Working' : p2pReview ? 'Review' : p2pAvailable ? 'Ready' : 'Unavailable';
-  badge.classList.add(p2pReview ? 'warn' : p2pAvailable ? 'good' : 'neutral');
-  refreshButton.disabled = p2pBusy || p2pReview !== null;
-  setText('#p2p-summary', p2pSummaryText);
-
-  const showWorkspace = p2pAvailable && p2pAssets.length > 0 && p2pReview === null;
-  setHidden('#p2p-workspace', !showWorkspace);
-  setHidden('#p2p-review', p2pReview === null);
-
-  if (p2pReview) {
-    const seconds = Math.max(0, Math.ceil((p2pReview.expiresAt - Date.now()) / 1_000));
-    setText('#p2p-review-action', p2pReview.action === 'create' ? 'Publish listing' : 'Unpublish listing');
-    setText('#p2p-review-item', p2pReview.marketHashName);
-    setText('#p2p-review-price', formatUsdMinor(p2pReview.priceMinor));
-    setText('#p2p-review-terms', p2pReview.termsVersion);
-    setText('#p2p-review-expiry', `One-time review expires in at most ${seconds} seconds.`);
-    confirmButton.textContent = p2pBusy
-      ? 'Confirming…'
-      : p2pReview.action === 'create' ? 'Confirm publish' : 'Confirm unpublish';
-    confirmButton.disabled = p2pBusy || seconds <= 0;
-    cancelButton.disabled = p2pBusy;
-    return;
-  }
-
-  replaceP2POptions();
-  if (!selectedP2PAssetId || !p2pAssets.some((asset) =>
-    asset.operationalAssetId === selectedP2PAssetId)) {
-    selectedP2PAssetId = p2pAssets[0]?.operationalAssetId ?? null;
-  }
-  select.value = selectedP2PAssetId ?? '';
-  select.disabled = p2pBusy;
-
-  const asset = selectedP2PAsset();
-  if (!asset) return;
-  const activeListing = Boolean(asset.listingId && asset.listingState === 'active');
-  const canPublish = asset.eligibility && !asset.listingId;
-  const reasons = [...asset.reasons];
-  if (asset.snapshotCompletedAt === null &&
-      !reasons.some((reason) => reason.code === 'snapshot_missing')) {
-    reasons.push({
-      code: 'snapshot_missing',
-      message: 'A complete inventory snapshot is required.',
-    });
-  }
-  if (asset.listingId && !activeListing) {
-    reasons.push({
-      code: 'listing_state_unavailable',
-      message: `Listing state ${asset.listingState ?? 'unknown'} cannot be unpublished here.`,
-    });
-  }
-
-  setText('#p2p-asset-name', asset.marketHashName);
-  setText('#p2p-snapshot-time', asset.snapshotCompletedAt
-    ? `Inventory snapshot: ${new Date(asset.snapshotCompletedAt).toLocaleString()} · context ${asset.contextId}`
-    : `No complete inventory snapshot · context ${asset.contextId}`);
-  const reasonList = element<HTMLUListElement>('#p2p-reasons');
-  reasonList.classList.toggle('good', reasons.length === 0 || activeListing);
-  const messages = activeListing
-    ? ['Active listing is eligible for unpublish.']
-    : reasons.length > 0
-      ? reasons.map(p2pReasonText)
-      : ['Eligible for a new P2P listing.'];
-  reasonList.replaceChildren(...messages.map((message) => {
-    const item = document.createElement('li');
-    item.textContent = message;
-    return item;
-  }));
-
-  setHidden('#p2p-price-field', activeListing);
-  priceInput.disabled = p2pBusy || !canPublish;
-  reviewButton.disabled = p2pBusy || (!activeListing && !canPublish);
-  reviewButton.textContent = p2pBusy
-    ? 'Requesting review…'
-    : activeListing ? 'Review unpublish' : 'Review publish';
-}
-
-async function loadP2PAssets(): Promise<void> {
-  p2pBusy = true;
-  p2pSummaryText = 'Checking current P2P eligibility…';
-  renderP2P();
-  try {
-    const response = await sendPopupMessage({
-      type: 'GET_P2P_ELIGIBLE_ASSETS',
-      version: POPUP_P2P_PROTOCOL_VERSION,
-    });
-    if (!isRecord(response) || !Array.isArray(response.assets)) {
-      throw new Error('P2P_INVALID_ELIGIBILITY_RESPONSE');
-    }
-    const normalized = response.assets.map(normalizeP2PAsset);
-    if (normalized.some((asset) => asset === null)) {
-      throw new Error('P2P_INVALID_ELIGIBILITY_RESPONSE');
-    }
-    const assets = normalized as P2PEligibleAsset[];
-    if (new Set(assets.map((asset) => asset.operationalAssetId)).size !== assets.length) {
-      throw new Error('P2P_INVALID_ELIGIBILITY_RESPONSE');
-    }
-    p2pAssets = assets;
-    p2pAvailable = true;
-    p2pSummaryText = assets.length > 0
-      ? 'Select your asset, request a bound review, then confirm with a separate click.'
-      : 'No synchronized assets are available. Run a complete portfolio inventory sync first.';
-    if (!assets.some((asset) => asset.operationalAssetId === selectedP2PAssetId)) {
-      selectedP2PAssetId = assets[0]?.operationalAssetId ?? null;
-    }
-  } catch (error) {
-    p2pAssets = [];
-    selectedP2PAssetId = null;
-    p2pAvailable = false;
-    p2pSummaryText = p2pFailureText(error);
-  } finally {
-    p2pBusy = false;
-    renderP2P();
-  }
-}
-
-async function prepareP2PReview(): Promise<void> {
-  const asset = selectedP2PAsset();
-  if (!asset) return;
-  const activeListing = Boolean(asset.listingId && asset.listingState === 'active');
-  let priceMinor: number | null = null;
-  if (!activeListing) {
-    priceMinor = parseUsdMinor(element<HTMLInputElement>('#p2p-price-input').value);
-    if (priceMinor === null) {
-      showNotice('Enter a valid USD price between $0.10 and $100,000.00.', 'error');
-      element<HTMLInputElement>('#p2p-price-input').focus();
-      return;
-    }
-  }
-
-  p2pBusy = true;
-  clearNotice();
-  renderP2P();
-  try {
-    const data = activeListing
-      ? {
-          action: 'unpublish' as const,
-          operationalAssetId: asset.operationalAssetId,
-          assetRevision: asset.assetRevision,
-          listingId: asset.listingId!,
-        }
-      : {
-          action: 'create' as const,
-          operationalAssetId: asset.operationalAssetId,
-          assetRevision: asset.assetRevision,
-          priceMinor: priceMinor!,
-        };
-    const response = await sendPopupMessage({
-      type: 'PREPARE_P2P_LISTING',
-      version: POPUP_P2P_PROTOCOL_VERSION,
-      data,
-    });
-    const review = isRecord(response) ? normalizeP2PReview(response.review) : null;
-    const exactBinding = review && review.operationalAssetId === asset.operationalAssetId
-      && review.assetRevision === asset.assetRevision
-      && review.marketHashName === asset.marketHashName
-      && (activeListing
-        ? review.action === 'unpublish' && review.listingId === asset.listingId
-        : review.action === 'create' && review.listingId === null && review.priceMinor === priceMinor);
-    if (!review || !exactBinding) throw new Error('P2P_REVIEW_BINDING_MISMATCH');
-    p2pReview = review;
-    p2pSummaryText = 'Review the exact item, action, price, and terms before confirming.';
-  } catch (error) {
-    showNotice(p2pFailureText(error), 'error');
-  } finally {
-    p2pBusy = false;
-    renderP2P();
-  }
-}
-
-async function cancelP2PReview(): Promise<void> {
-  const review = p2pReview;
-  p2pReview = null;
-  p2pSummaryText = 'Listing review cancelled. No listing action was committed.';
-  renderP2P();
-  if (!review) return;
-  try {
-    await sendPopupMessage({
-      type: 'CANCEL_P2P_LISTING_REVIEW',
-      version: POPUP_P2P_PROTOCOL_VERSION,
-      data: { reviewId: review.reviewId },
-    });
-  } catch {
-    // The backend intent remains harmless and expires independently. The local
-    // opaque handle is already gone, so it cannot be confirmed from this popup.
-  }
-}
-
-async function confirmP2PReview(): Promise<void> {
-  const review = p2pReview;
-  if (!review) return;
-  let refreshAfter = false;
-  p2pBusy = true;
-  clearNotice();
-  renderP2P();
-  try {
-    const response = await sendPopupMessage({
-      type: 'CONFIRM_P2P_LISTING',
-      version: POPUP_P2P_PROTOCOL_VERSION,
-      data: { reviewId: review.reviewId },
-    }, 15_000);
-    if (!isRecord(response) || response.success !== true ||
-        response.action !== review.action || typeof response.listingId !== 'string') {
-      throw new Error('P2P_INVALID_BACKEND_RESPONSE');
-    }
-    p2pReview = null;
-    refreshAfter = true;
-    showNotice(
-      review.action === 'create' ? 'P2P listing published.' : 'P2P listing unpublished.',
-      'success',
-    );
-  } catch (error) {
-    if (isTerminalP2PConfirmError(error)) {
-      p2pReview = null;
-      refreshAfter = true;
-      showNotice(p2pFailureText(error), 'error');
-    } else {
-      // The result may have committed before the response was lost. Keep the
-      // opaque review handle and retry the same intent/idempotency binding;
-      // never create a fresh listing intent for an ambiguous result.
-      p2pReview = review;
-      p2pSummaryText = 'Commit result is unknown. Retry Confirm to reuse the same one-time intent and idempotency key.';
-      showNotice('Could not verify the commit result. You can safely retry Confirm before this review expires.', 'warning');
-    }
-  } finally {
-    p2pBusy = false;
-    renderP2P();
-  }
-  if (refreshAfter) await loadP2PAssets();
 }
 
 async function refreshPrices(): Promise<void> {
@@ -1256,23 +853,6 @@ function bindEvents(): void {
   element<HTMLButtonElement>('#unpair-device-btn').addEventListener('click', () => {
     void unpairDevice();
   });
-  element<HTMLButtonElement>('#refresh-p2p-btn').addEventListener('click', () => {
-    void loadP2PAssets();
-  });
-  element<HTMLSelectElement>('#p2p-asset-select').addEventListener('change', (event) => {
-    selectedP2PAssetId = (event.currentTarget as HTMLSelectElement).value;
-    element<HTMLInputElement>('#p2p-price-input').value = '';
-    renderP2P();
-  });
-  element<HTMLButtonElement>('#review-p2p-btn').addEventListener('click', () => {
-    void prepareP2PReview();
-  });
-  element<HTMLButtonElement>('#confirm-p2p-btn').addEventListener('click', () => {
-    void confirmP2PReview();
-  });
-  element<HTMLButtonElement>('#cancel-p2p-review-btn').addEventListener('click', () => {
-    void cancelP2PReview();
-  });
   element<HTMLButtonElement>('#refresh-prices-btn').addEventListener('click', () => {
     void refreshPrices();
   });
@@ -1284,13 +864,11 @@ async function init(): Promise<void> {
   bindEvents();
   renderSettings();
   renderPortfolio();
-  renderP2P();
 
   await Promise.allSettled([
     checkAuth(),
     loadSettings(),
     loadPortfolioStatus(),
-    loadP2PAssets(),
     loadPriceStatus(),
   ]);
 }

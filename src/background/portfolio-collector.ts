@@ -1,12 +1,14 @@
 import {
   GatewayPayloadError,
   MAX_PORTFOLIO_INVENTORY_ITEMS_PER_RUN,
+  MAX_PORTFOLIO_TRADES_PER_RUN,
   assertSafeGatewayPayload,
   assertSteamId64,
   createRandomId,
   type PortfolioItemDto,
   type PortfolioSnapshot,
   type PortfolioSyncChunkPayload,
+  type PortfolioTradeDto,
 } from '../shared/gateway-dto';
 import {
   assertPortfolioSnapshot,
@@ -16,6 +18,8 @@ import {
   STEAM_OFFERS_TRUNCATED_WARNING,
   type SteamOffersReadResult,
   type SteamReadSessionProvider,
+  type SteamTradesReadOptions,
+  type SteamTradesReadResult,
 } from './steam-read-session-provider';
 
 export interface PortfolioCollectorOptions {
@@ -33,9 +37,18 @@ export interface PortfolioCollectorOptions {
 
 export type PortfolioCollectorSource = 'inventory' | 'tradeHistory' | 'tradeOffers';
 export const PORTFOLIO_OVERSIZED_RECORDS_WARNING = 'OVERSIZED_RECORDS_DROPPED' as const;
+export const TRADE_HISTORY_TRUNCATED_WARNING = 'TRADE_HISTORY_TRUNCATED' as const;
 export type PortfolioCollectorWarningCode =
   | typeof STEAM_OFFERS_TRUNCATED_WARNING
+  | typeof TRADE_HISTORY_TRUNCATED_WARNING
   | typeof PORTFOLIO_OVERSIZED_RECORDS_WARNING;
+export type PortfolioCollectorSourceFailureCode =
+  | 'STEAM_SESSION_REQUIRED'
+  | 'STEAM_ACCOUNT_MISMATCH'
+  | 'STEAM_RATE_LIMITED'
+  | 'STEAM_UNAVAILABLE'
+  | 'STEAM_RESPONSE_INVALID'
+  | 'STEAM_READ_FAILED';
 
 /**
  * The gateway DTO caps a trade or offer at 200 items per side. Steam happily
@@ -48,6 +61,8 @@ export type PortfolioCollectorWarningCode =
  * downstream may read the missing rows as "this never happened".
  */
 const MAX_RECORD_ITEMS_PER_SIDE = 200;
+/** Steam may return fewer than requested while still setting `more`. */
+const MAX_TRADE_HISTORY_PAGES = 10;
 
 /**
  * A portfolio only cares about offers that actually moved items:
@@ -80,6 +95,11 @@ type CollectedOffersResult = SteamOffersReadResult | {
   readonly offers: readonly [];
   readonly warningCode?: undefined;
 };
+type CollectedTradesResult = {
+  readonly complete: boolean;
+  readonly trades: readonly PortfolioTradeDto[];
+  readonly warningCode?: typeof TRADE_HISTORY_TRUNCATED_WARNING;
+};
 
 export interface CollectedPortfolioSync {
   readonly snapshot: PortfolioSnapshot;
@@ -92,7 +112,148 @@ export interface CollectedPortfolioSync {
     readonly trades: number;
     readonly offers: number;
     readonly failedSources: readonly PortfolioCollectorSource[];
+    readonly sourceFailureCodes: Readonly<Partial<Record<
+      PortfolioCollectorSource,
+      PortfolioCollectorSourceFailureCode
+    >>>;
     readonly warningCodes: readonly PortfolioCollectorWarningCode[];
+  };
+}
+
+function steamFailureStatus(error: unknown): number | undefined {
+  if (!(error instanceof GatewayPayloadError)) return undefined;
+  const status = error.safeContext['status'];
+  return typeof status === 'number' && Number.isSafeInteger(status) ? status : undefined;
+}
+
+function isSteamSessionFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'STEAM_SESSION_REQUIRED') return true;
+  if (!(error instanceof GatewayPayloadError)) return false;
+  const reason = error.safeContext['reason'];
+  const status = steamFailureStatus(error);
+  return reason === 'steam-session-unavailable' ||
+    ((status === 401 || status === 403) && reason === 'steam-read-failed');
+}
+
+function portfolioSourceFailureCode(error: unknown): PortfolioCollectorSourceFailureCode {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'STEAM_SESSION_REQUIRED' || isSteamSessionFailure(error)) {
+    return 'STEAM_SESSION_REQUIRED';
+  }
+  if (message === 'STEAM_ACCOUNT_MISMATCH' ||
+      (error instanceof GatewayPayloadError &&
+        error.safeContext['reason'] === 'steam-account-mismatch')) {
+    return 'STEAM_ACCOUNT_MISMATCH';
+  }
+  const status = steamFailureStatus(error);
+  if (status === 429) return 'STEAM_RATE_LIMITED';
+  if (status !== undefined && status >= 500) return 'STEAM_UNAVAILABLE';
+  if (error instanceof GatewayPayloadError && error.code === 'INVALID_PAYLOAD' &&
+      error.safeContext['reason'] !== 'steam-read-failed') {
+    return 'STEAM_RESPONSE_INVALID';
+  }
+  return 'STEAM_READ_FAILED';
+}
+
+async function readTradeHistoryPage(
+  provider: SteamReadSessionProvider,
+  maxTrades: number,
+  options: SteamTradesReadOptions,
+): Promise<SteamTradesReadResult> {
+  try {
+    return await provider.readRecentTrades(maxTrades, options);
+  } catch (error) {
+    // Only an authentication/session verdict can benefit from a new Steam
+    // credential. Data-shape, rate-limit and generic HTTP failures stay isolated
+    // to this source and are not multiplied by a blind retry.
+    if (!isSteamSessionFailure(error) || !provider.refreshAccessToken) throw error;
+    await provider.refreshAccessToken();
+    return provider.readRecentTrades(maxTrades, options);
+  }
+}
+
+async function collectRecentTrades(
+  provider: SteamReadSessionProvider,
+  maxTrades: number,
+): Promise<CollectedTradesResult> {
+  const tradesById = new Map<string, PortfolioTradeDto>();
+  const seenCursors = new Set<string>();
+  let cursor: SteamTradesReadOptions['cursor'];
+  let totalTrades: number | undefined;
+
+  for (let page = 0; page < MAX_TRADE_HISTORY_PAGES; page += 1) {
+    const remaining = maxTrades - tradesById.size;
+    if (remaining <= 0) {
+      return {
+        complete: totalTrades !== undefined && tradesById.size >= totalTrades,
+        trades: [...tradesById.values()],
+        ...(totalTrades === undefined || tradesById.size < totalTrades
+          ? { warningCode: TRADE_HISTORY_TRUNCATED_WARNING }
+          : {}),
+      };
+    }
+    const result = await readTradeHistoryPage(provider, remaining, {
+      ...(cursor ? { cursor } : {}),
+      includeTotal: page === 0,
+    });
+    if (totalTrades === undefined && result.totalTrades !== undefined) {
+      totalTrades = result.totalTrades;
+    }
+    for (const trade of result.trades) {
+      if (!tradesById.has(trade.tradeId) && tradesById.size < maxTrades) {
+        tradesById.set(trade.tradeId, trade);
+      }
+    }
+
+    // Steam's total is the strongest completion signal when its `more` marker
+    // lags. This also handles a final page that repeats the boundary trade.
+    if (totalTrades !== undefined && tradesById.size >= totalTrades) {
+      return { complete: true, trades: [...tradesById.values()] };
+    }
+    if (result.hasMore !== true) {
+      const complete = totalTrades === undefined || tradesById.size >= totalTrades;
+      return {
+        complete,
+        trades: [...tradesById.values()],
+        ...(!complete ? { warningCode: TRADE_HISTORY_TRUNCATED_WARNING } : {}),
+      };
+    }
+    if (tradesById.size >= maxTrades) {
+      return {
+        complete: false,
+        trades: [...tradesById.values()],
+        warningCode: TRADE_HISTORY_TRUNCATED_WARNING,
+      };
+    }
+
+    const lastTrade = result.trades[result.trades.length - 1];
+    if (!lastTrade) {
+      return {
+        complete: false,
+        trades: [...tradesById.values()],
+        warningCode: TRADE_HISTORY_TRUNCATED_WARNING,
+      };
+    }
+    const nextCursorKey = `${lastTrade.occurredAt}:${lastTrade.tradeId}`;
+    if (seenCursors.has(nextCursorKey)) {
+      return {
+        complete: false,
+        trades: [...tradesById.values()],
+        warningCode: TRADE_HISTORY_TRUNCATED_WARNING,
+      };
+    }
+    seenCursors.add(nextCursorKey);
+    cursor = {
+      startAfterTime: lastTrade.occurredAt,
+      startAfterTradeId: lastTrade.tradeId,
+    };
+  }
+
+  return {
+    complete: false,
+    trades: [...tradesById.values()],
+    warningCode: TRADE_HISTORY_TRUNCATED_WARNING,
   };
 }
 
@@ -123,8 +284,9 @@ export async function collectPortfolioSync(
   options: PortfolioCollectorOptions,
 ): Promise<CollectedPortfolioSync> {
   assertSteamId64(options.steamId);
-  const recentTradeLimit = options.recentTradeLimit ?? 100;
-  if (!Number.isSafeInteger(recentTradeLimit) || recentTradeLimit < 1 || recentTradeLimit > 100) {
+  const recentTradeLimit = options.recentTradeLimit ?? MAX_PORTFOLIO_TRADES_PER_RUN;
+  if (!Number.isSafeInteger(recentTradeLimit) || recentTradeLimit < 1 ||
+      recentTradeLimit > MAX_PORTFOLIO_TRADES_PER_RUN) {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.recentTradeLimit' });
   }
 
@@ -138,7 +300,11 @@ export async function collectPortfolioSync(
   }
 
   const failedSources: PortfolioCollectorSource[] = [];
-  let completeSources = 0;
+  const sourceFailureCodes: Partial<Record<
+    PortfolioCollectorSource,
+    PortfolioCollectorSourceFailureCode
+  >> = {};
+  let usableSources = 0;
 
   const [context2, context16] = sources.inventory
     ? await Promise.all([
@@ -167,40 +333,43 @@ export async function collectPortfolioSync(
     // contexts incomplete. Append-only sources can still be uploaded safely.
     failedSources.push('inventory');
   } else if (sources.inventory) {
-    completeSources += 1;
+    usableSources += 1;
   }
 
-  const trades = sources.tradeHistory
-    ? await options.provider.readRecentTrades(recentTradeLimit).catch(() => {
+  let trades: CollectedTradesResult = { complete: false, trades: [] };
+  if (sources.tradeHistory) {
+    try {
+      trades = await collectRecentTrades(options.provider, recentTradeLimit);
+      // Append-only facts remain safe and useful even when the bounded run cap
+      // prevents a completeness claim.
+      usableSources += 1;
+    } catch (error) {
       failedSources.push('tradeHistory');
-      return { complete: false as const, trades: [] };
-    })
-    : { complete: false as const, trades: [] };
-  if (sources.tradeHistory && trades.complete) {
-    completeSources += 1;
-  } else if (sources.tradeHistory) {
-    failedSources.push('tradeHistory');
+      sourceFailureCodes.tradeHistory = portfolioSourceFailureCode(error);
+    }
   }
 
   const emptyOffers: CollectedOffersResult = { complete: false, offers: [] };
-  const offers = sources.tradeOffers
-    ? await options.provider.readTradeOffers().catch(() => {
+  let offers: CollectedOffersResult = emptyOffers;
+  if (sources.tradeOffers) {
+    try {
+      offers = await options.provider.readTradeOffers();
+      usableSources += 1;
+    } catch (error) {
       failedSources.push('tradeOffers');
-      return emptyOffers;
-    })
-    : emptyOffers;
-  if (sources.tradeOffers && offers.complete) {
-    completeSources += 1;
-  } else if (sources.tradeOffers) {
-    failedSources.push('tradeOffers');
+      sourceFailureCodes.tradeOffers = portfolioSourceFailureCode(error);
+    }
   }
 
-  const warningCodes: PortfolioCollectorWarningCode[] = offers.warningCode ===
-    STEAM_OFFERS_TRUNCATED_WARNING
-    ? [STEAM_OFFERS_TRUNCATED_WARNING]
-    : [];
+  const warningCodes: PortfolioCollectorWarningCode[] = [];
+  if (trades.warningCode === TRADE_HISTORY_TRUNCATED_WARNING) {
+    warningCodes.push(TRADE_HISTORY_TRUNCATED_WARNING);
+  }
+  if (offers.warningCode === STEAM_OFFERS_TRUNCATED_WARNING) {
+    warningCodes.push(STEAM_OFFERS_TRUNCATED_WARNING);
+  }
 
-  if (completeSources === 0) {
+  if (usableSources === 0) {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { reason: 'steam-read-failed' });
   }
 
@@ -247,7 +416,8 @@ export async function collectPortfolioSync(
       context16Items: context16.items.length,
       trades: trades.trades.length,
       offers: offers.offers.length,
-      failedSources: [...new Set(failedSources)],
+      failedSources,
+      sourceFailureCodes,
       warningCodes,
     },
   };

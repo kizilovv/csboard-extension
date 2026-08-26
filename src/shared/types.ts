@@ -13,10 +13,6 @@ declare const __brand: unique symbol;
 type Brand<T, B extends string> = T & { readonly [__brand]: B };
 
 import type {
-  P2PEligibleAsset,
-  P2PListingCommitResult,
-  P2PListingReview,
-  PrepareP2PListingRequest,
   PopupSettingsV2,
   PricePreferenceSyncStatus,
   PortfolioSyncStatus as PopupPortfolioSyncStatus,
@@ -329,11 +325,6 @@ export type ExtensionMessage =
   | { type: 'UNPAIR_DEVICE'; version: 1 }
   | { type: 'RUN_MANUAL_SYNC'; version: 1 }
   | { type: 'GET_PORTFOLIO_SYNC_STATUS'; version: 1 }
-  // P2P publication. Popup-only, user-reviewed, listing actions only.
-  | { type: 'GET_P2P_ELIGIBLE_ASSETS'; version: 1 }
-  | { type: 'PREPARE_P2P_LISTING'; version: 1; data: PrepareP2PListingRequest }
-  | { type: 'CONFIRM_P2P_LISTING'; version: 1; data: { reviewId: string } }
-  | { type: 'CANCEL_P2P_LISTING_REVIEW'; version: 1; data: { reviewId: string } }
   ;
 
 // Extract the type string for runtime checks
@@ -371,10 +362,6 @@ export type MessageResponseMap = {
   UNPAIR_DEVICE: { status: PopupPortfolioSyncStatus };
   RUN_MANUAL_SYNC: { status: PopupPortfolioSyncStatus };
   GET_PORTFOLIO_SYNC_STATUS: { status: PopupPortfolioSyncStatus };
-  GET_P2P_ELIGIBLE_ASSETS: { assets: readonly P2PEligibleAsset[] };
-  PREPARE_P2P_LISTING: { review: P2PListingReview };
-  CONFIRM_P2P_LISTING: P2PListingCommitResult;
-  CANCEL_P2P_LISTING_REVIEW: { success: true };
 };
 
 // Type-safe response extraction

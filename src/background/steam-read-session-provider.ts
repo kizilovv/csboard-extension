@@ -14,7 +14,12 @@ import { parseSteamAssetProperties } from '../shared/steam-asset-properties';
 const STEAM_API_ROOT = 'https://api.steampowered.com/IEconService';
 const STEAM_TOKEN_PAGE = 'https://steamcommunity.com/my/tradehistory?l=english';
 const MAX_INVENTORY_PAGES = 20;
-const TOKEN_MEMORY_TTL_MS = 5 * 60 * 1_000;
+// Portfolio auto-sync runs hourly. A five-minute local TTL made the worker
+// throw away a still-valid first-party page token long before the next run and
+// fall back to a cross-site Steam page fetch that third-party-cookie blocking
+// commonly answers as logged out. The token remains process-memory-only and is
+// still rejected immediately by Steam when it actually expires.
+const TOKEN_MEMORY_TTL_MS = 70 * 60 * 1_000;
 /** How far back settled offers stay interesting to a portfolio. */
 const OFFER_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
 
@@ -145,6 +150,8 @@ export interface SteamReadSessionProvider {
   offerAccessToken(token: string, tokenSteamId: string): void;
   /** Safe boolean only; the token itself never crosses this boundary. */
   hasUsableAccessToken?(): boolean;
+  /** Re-mints in place; callers receive only completion, never the credential. */
+  refreshAccessToken?(): Promise<void>;
   forgetSession(): void;
 }
 
@@ -152,6 +159,11 @@ export interface SteamReadSessionProviderOptions {
   readonly steamId: string;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => number;
+  /** Private worker/tab bridge; its return value must never be persisted/logged. */
+  readonly requestFirstPartyCredential?: () => Promise<{
+    readonly token: string;
+    readonly steamId: string;
+  } | null>;
 }
 
 interface MemoryToken {
@@ -462,6 +474,9 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
   private pendingToken: Promise<string> | null = null;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly requestFirstPartyCredential?: SteamReadSessionProviderOptions[
+    'requestFirstPartyCredential'
+  ];
 
   constructor(private readonly steamId: string, options: SteamReadSessionProviderOptions) {
     assertSteamId64(steamId);
@@ -470,6 +485,7 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     // "Illegal invocation": `this` is the instance, not WorkerGlobalScope.
     this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
     this.now = options.now ?? Date.now;
+    this.requestFirstPartyCredential = options.requestFirstPartyCredential;
   }
 
   offerAccessToken(token: string, tokenSteamId: string): void {
@@ -489,6 +505,15 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
 
   forgetSession(): void {
     this.memoryToken = null;
+  }
+
+  async refreshAccessToken(): Promise<void> {
+    const firstParty = await this.requestFirstPartyCredential?.();
+    if (firstParty) {
+      this.offerAccessToken(firstParty.token, firstParty.steamId);
+      if (this.hasUsableAccessToken()) return;
+    }
+    await this.getAccessToken(true);
   }
 
   private async mintAccessToken(): Promise<string> {
@@ -552,7 +577,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     params: Readonly<Record<string, string>>,
   ): Promise<Record<string, unknown>> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const token = await this.getAccessToken(attempt === 1);
+      if (attempt === 1) await this.refreshAccessToken();
+      const token = await this.getAccessToken();
       const query = new URLSearchParams({ ...params, access_token: token });
       const response = await this.fetchImpl(`${STEAM_API_ROOT}/${method}/v1/?${query}`, {
         method: 'GET',
@@ -563,7 +589,10 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         headers: { Accept: 'application/json' },
       });
       if ((response.status === 401 || response.status === 403) && attempt === 0) {
-        this.forgetSession();
+        // Keep the page-derived credential in memory until a replacement has
+        // actually been minted. The forced second attempt bypasses it; retaining
+        // it only prevents a failed cross-site mint from destroying the sole
+        // first-party proof before a Steam page can offer a fresh token.
         continue;
       }
       if (!response.ok) {

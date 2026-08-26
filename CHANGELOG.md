@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.6 — Store release
+
+- The CSBOARD website can now ask the extension to refresh the Steam inventory
+  snapshot a listing needs, and ask whether that run has finished. Both
+  commands are pinned to the exact `csboard.com` / `csboard.trade` origins and
+  return no Steam data; an unpaired install, or one with portfolio uploads
+  switched off, is refused with a status code rather than being switched on.
+  A missing signed-in Steam tab is reported to the site under its own name so
+  it can say what to do instead of "sync failed".
+- Removed the popup's P2P listing panel. Publishing and unpublishing a lot now
+  happen on the website and in the mobile app; the extension keeps the
+  inventory sync and the Steam surfaces. The listing API access, its message
+  types and its stored review state are gone with it.
+
 ## 1.1.5 — Store hotfix
 
 - Restored exact float, paint seed and paint identity metadata for the signed-in

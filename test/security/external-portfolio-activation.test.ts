@@ -5,11 +5,24 @@ import {
   dispatchExternalMessage,
   registerExternalStatusRouter,
   type ExternalPairAndEnableHandlers,
+  type ExternalSyncHandlers,
 } from '../../src/background/external-router.ts';
 
 const STATUS_ORIGINS = new Set(['https://csboard.com', 'https://csboard.trade']);
 const PAIRING_ORIGINS = new Set(['https://csfolder.com']);
+const SYNC_ORIGINS = new Set(['https://csboard.com', 'https://csboard.trade']);
 const VALID_CODE = 'CSF-2345-6789-ABCD-EFGH';
+
+/** CSFolder must not gain the CSBOARD sync commands, and a sync handler must
+ *  never be reached by a pairing message. Any call here is a routing bug. */
+const forbiddenSyncHandlers: ExternalSyncHandlers = {
+  async requestManualSync() {
+    throw new Error('CSFolder activation must not reach the manual-sync handler');
+  },
+  async readSyncStatus() {
+    throw new Error('CSFolder activation must not reach the sync-status handler');
+  },
+};
 
 interface Calls {
   pair: string[];
@@ -49,8 +62,10 @@ function harness(
     dispatchExternalMessage(message, origin, {
       statusAllowedOrigins: STATUS_ORIGINS,
       pairingAllowedOrigins: PAIRING_ORIGINS,
+      syncAllowedOrigins: SYNC_ORIGINS,
       extensionVersion: '1.1.2',
       handlers,
+      syncHandlers: forbiddenSyncHandlers,
     });
   return { calls, dispatch };
 }
@@ -283,7 +298,9 @@ test('fresh pairing and paired reactivation share one in-flight guard', async ()
   const unregister = registerExternalStatusRouter({
     statusAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
     pairingAllowedOrigins: ['https://csfolder.com'],
+    syncAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
     extensionVersion: '1.1.2',
+    syncHandlers: forbiddenSyncHandlers,
     handlers: {
       async isPaired() { return true; },
       async pair() { await blockedPair; },

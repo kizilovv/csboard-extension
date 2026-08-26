@@ -10,8 +10,10 @@
 
 import { sendMessageIfContextAlive } from '../../shared/message-bus';
 import {
+  isSteamPageCredentialRequest,
   readSteamPageCredential,
   STEAM_COMMUNITY_ORIGIN,
+  type SteamPageCredentialResponse,
 } from '../../shared/steam-page-credential';
 
 const CREDENTIAL_REFRESH_MS = 4 * 60 * 1_000;
@@ -34,6 +36,23 @@ function offerWithBoundedInitialRetry(attempt = 1): void {
   if (offerCredential() || attempt >= MAX_INITIAL_ATTEMPTS) return;
   window.setTimeout(() => offerWithBoundedInitialRetry(attempt + 1), INITIAL_RETRY_MS);
 }
+
+// A cold MV3 worker cannot wait up to four minutes for the periodic offer when
+// the user has just pressed Sync now. It may ask an already-open trusted Steam
+// tab for the same two-field credential. The response goes only to our own
+// extension worker and is neither stored nor exposed to the page.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id ||
+      window.location.origin !== STEAM_COMMUNITY_ORIGIN ||
+      !isSteamPageCredentialRequest(message)) {
+    return false;
+  }
+  const response: SteamPageCredentialResponse = {
+    credential: readSteamPageCredential(),
+  };
+  sendResponse(response);
+  return false;
+});
 
 offerWithBoundedInitialRetry();
 window.addEventListener('pageshow', () => offerWithBoundedInitialRetry());

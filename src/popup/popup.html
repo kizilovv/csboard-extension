@@ -203,67 +203,6 @@
 
       </section>
 
-      <section class="card" aria-labelledby="p2p-heading">
-        <div class="section-heading-row">
-          <div>
-            <p class="eyebrow">P2P market</p>
-            <h2 id="p2p-heading" class="card-title">Publish your item</h2>
-          </div>
-          <div class="heading-actions">
-            <span id="p2p-state-badge" class="state-badge neutral">Checking</span>
-            <button id="refresh-p2p-btn" class="text-button" type="button" disabled>Refresh</button>
-          </div>
-        </div>
-
-        <p id="p2p-summary" class="supporting-text">Checking current P2P eligibility…</p>
-
-        <div id="p2p-workspace" class="p2p-workspace hidden">
-          <label class="field" for="p2p-asset-select">
-            <span class="field-label">Your synced asset</span>
-            <select id="p2p-asset-select" disabled></select>
-          </label>
-
-          <div id="p2p-asset-detail" class="p2p-asset-detail">
-            <span id="p2p-asset-name" class="setting-title"></span>
-            <span id="p2p-snapshot-time" class="setting-description"></span>
-            <ul id="p2p-reasons" class="reason-list" aria-live="polite"></ul>
-          </div>
-
-          <label id="p2p-price-field" class="field" for="p2p-price-input">
-            <span class="field-label">Listing price (USD)</span>
-            <span class="price-input-wrap">
-              <span aria-hidden="true">$</span>
-              <input id="p2p-price-input" type="text" inputmode="decimal" maxlength="9" placeholder="0.00" autocomplete="off" disabled>
-            </span>
-            <span class="setting-description">Allowed range: $0.10–$100,000.00.</span>
-          </label>
-
-          <button id="review-p2p-btn" class="btn btn-primary btn-full" type="button" disabled>Review publish</button>
-        </div>
-
-        <div id="p2p-review" class="p2p-review hidden" role="region" aria-labelledby="p2p-review-heading">
-          <p class="eyebrow">Required review</p>
-          <h3 id="p2p-review-heading" class="card-title">Confirm exact listing terms</h3>
-          <dl class="review-grid">
-            <div><dt>Action</dt><dd id="p2p-review-action">—</dd></div>
-            <div><dt>Item</dt><dd id="p2p-review-item">—</dd></div>
-            <div><dt>Price</dt><dd id="p2p-review-price">—</dd></div>
-            <div><dt>Terms</dt><dd id="p2p-review-terms">—</dd></div>
-          </dl>
-          <p id="p2p-review-expiry" class="setting-description"></p>
-          <p class="p2p-safety-note">This only publishes or unpublishes your listing. It cannot buy, create an order, or perform a Steam action.</p>
-          <div class="button-row">
-            <button id="confirm-p2p-btn" class="btn btn-primary" type="button">Confirm publish</button>
-            <button id="cancel-p2p-review-btn" class="btn btn-secondary" type="button">Cancel</button>
-          </div>
-        </div>
-
-        <details class="privacy-disclosure">
-          <summary>How confirmation works</summary>
-          <p>Review creates a one-time intent bound to this asset revision, USD price, terms, and idempotency key. It stays only in service-worker memory for at most two minutes. Confirm is a separate click.</p>
-        </details>
-      </section>
-
       <section class="card data-card" aria-label="Price data status">
         <div>
           <span id="prices-count" class="setting-title">Price data: —</span>

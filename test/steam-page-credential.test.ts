@@ -3,8 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
+  isSteamPageCredentialRequest,
   isTrustedSteamPageSender,
   normalizeSteamPageCredential,
+  normalizeSteamPageCredentialResponse,
 } from '../src/shared/steam-page-credential.ts';
 
 const TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9.payload-part.signature-part';
@@ -157,6 +159,22 @@ test('the credential bridge contract is exact-schema and bounded', () => {
     pageAccessToken: TOKEN,
     pageSteamId: '123',
   }), null);
+  assert.equal(isSteamPageCredentialRequest({
+    type: 'REQUEST_STEAM_PAGE_CREDENTIAL',
+    version: 1,
+  }), true);
+  assert.equal(isSteamPageCredentialRequest({
+    type: 'REQUEST_STEAM_PAGE_CREDENTIAL',
+    version: 1,
+    arbitrary: true,
+  }), false);
+  assert.deepEqual(normalizeSteamPageCredentialResponse({
+    credential: { pageAccessToken: TOKEN, pageSteamId: STEAM_ID },
+  }), { pageAccessToken: TOKEN, pageSteamId: STEAM_ID });
+  assert.equal(normalizeSteamPageCredentialResponse({
+    credential: { pageAccessToken: TOKEN, pageSteamId: STEAM_ID },
+    extra: true,
+  }), null);
 });
 
 test('the bridge is exact-origin, bounded-retry, and has no storage/log/network capability', async () => {
@@ -174,6 +192,8 @@ test('the bridge is exact-origin, bounded-retry, and has no storage/log/network 
   );
   assert.match(source, /MAX_INITIAL_ATTEMPTS = 20/);
   assert.match(source, /CREDENTIAL_REFRESH_MS = 4 \* 60 \* 1_000/);
+  assert.match(source, /isSteamPageCredentialRequest\(message\)/);
+  assert.match(source, /sender\.id !== chrome\.runtime\.id/);
   assert.doesNotMatch(source, /chrome\.storage|\bfetch\s*\(|createLogger|console\./);
 });
 

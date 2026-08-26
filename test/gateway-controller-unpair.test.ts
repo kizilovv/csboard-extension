@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { GatewayController } from '../src/background/gateway-controller.ts';
@@ -18,6 +19,103 @@ function deferred(): Deferred {
   });
   return { promise, resolve };
 }
+
+test('successful syncs retain the same memory-only Steam session for the next run', async (t) => {
+  const originalChrome = globalThis.chrome;
+  t.after(() => {
+    globalThis.chrome = originalChrome;
+  });
+
+  const local: Record<string, unknown> = {};
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get(key: string) {
+          return { [key]: local[key] };
+        },
+        async set(values: Record<string, unknown>) {
+          Object.assign(local, values);
+        },
+      },
+    },
+  } as typeof chrome;
+
+  let usable = true;
+  let forgotSession = 0;
+  let inventoryReads = 0;
+  const provider: SteamReadSessionProvider = {
+    async readInventoryContext(contextId) {
+      assert.equal(usable, true, 'the previous run discarded the in-memory session');
+      inventoryReads += 1;
+      return { contextId, complete: true, items: [] };
+    },
+    async readRecentTrades() {
+      return { complete: true, trades: [], icons: {}, nameColors: {} };
+    },
+    async readTradeOffers() {
+      return { complete: true, offers: [] };
+    },
+    async readTradeOffersForDisplay() {
+      return { complete: true, offers: [] };
+    },
+    offerAccessToken() {},
+    hasUsableAccessToken() {
+      return usable;
+    },
+    forgetSession() {
+      forgotSession += 1;
+      usable = false;
+    },
+  };
+
+  const rawFixture = JSON.parse(await readFile(
+    new URL('../tests/fixtures/gateway-portfolio-sync-v1.json', import.meta.url),
+    'utf8',
+  )) as { envelope: Record<string, unknown> & { protected: Record<string, unknown> } };
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const envelope = structuredClone(rawFixture.envelope);
+  envelope.protected.issuedAt = nowSeconds;
+  envelope.protected.expiresAt = nowSeconds + 120;
+
+  const registration = {
+    id: 'registration' as const,
+    deviceId: 'device_1234567890',
+    steamId: '76561198000000000',
+    gatewayOrigin: 'https://csboard.com',
+    recipientKeyId: 'gateway-key-v1',
+    pairedAt: 1,
+  };
+  const controller = new GatewayController({
+    client: {
+      origin: 'https://csboard.com',
+      async seal() {
+        return structuredClone(envelope);
+      },
+      async sendEnvelope() {
+        return { accepted: true, retryable: false };
+      },
+    } as unknown as ProtectedGatewayClient,
+    deviceKeys: {
+      async getRegistration() {
+        return registration;
+      },
+    } as unknown as IndexedDbDeviceKeyStore,
+    extensionVersion: '1.1.0',
+    createSteamProvider: () => provider,
+    getEnabledSources: async () => ({
+      inventory: true,
+      tradeHistory: false,
+      tradeOffers: false,
+    }),
+  });
+
+  await controller.syncNow();
+  await controller.syncNow();
+
+  assert.equal(inventoryReads, 4);
+  assert.equal(forgotSession, 0);
+  assert.equal(usable, true);
+});
 
 test('unpair fences a portfolio sync paused in Steam collection', async (t) => {
   const originalChrome = globalThis.chrome;

@@ -16,6 +16,7 @@ import {
   collectPortfolioSync,
   redactPortfolioFailure,
   type PortfolioCollectorSource,
+  type PortfolioCollectorSourceFailureCode,
   type PortfolioCollectorWarningCode,
   type SafePortfolioFailureCode,
 } from './portfolio-collector';
@@ -59,6 +60,10 @@ export class GatewayController implements InternalGatewayHandlers {
     readonly trades: number;
     readonly offers: number;
     readonly failedSources: readonly PortfolioCollectorSource[];
+    readonly sourceFailureCodes: Readonly<Partial<Record<
+      PortfolioCollectorSource,
+      PortfolioCollectorSourceFailureCode
+    >>>;
     readonly warningCodes: readonly PortfolioCollectorWarningCode[];
   }> | null = null;
   private pairInFlight: Promise<{ readonly paired: true }> | null = null;
@@ -182,6 +187,10 @@ export class GatewayController implements InternalGatewayHandlers {
     readonly trades: number;
     readonly offers: number;
     readonly failedSources: readonly PortfolioCollectorSource[];
+    readonly sourceFailureCodes: Readonly<Partial<Record<
+      PortfolioCollectorSource,
+      PortfolioCollectorSourceFailureCode
+    >>>;
     readonly warningCodes: readonly PortfolioCollectorWarningCode[];
   }> {
     if (this.unpairInFlight) throw new PortfolioSyncCancelledError();
@@ -205,6 +214,10 @@ export class GatewayController implements InternalGatewayHandlers {
     readonly trades: number;
     readonly offers: number;
     readonly failedSources: readonly PortfolioCollectorSource[];
+    readonly sourceFailureCodes: Readonly<Partial<Record<
+      PortfolioCollectorSource,
+      PortfolioCollectorSourceFailureCode
+    >>>;
     readonly warningCodes: readonly PortfolioCollectorWarningCode[];
   }> {
     let provider: SteamReadSessionProvider | null = null;
@@ -272,18 +285,21 @@ export class GatewayController implements InternalGatewayHandlers {
         trades: collected.summary.trades,
         offers: collected.summary.offers,
         failedSources: collected.summary.failedSources,
+        sourceFailureCodes: collected.summary.sourceFailureCodes,
         warningCodes: collected.summary.warningCodes,
       };
     } catch (error) {
       if (error instanceof PortfolioSyncCancelledError) {
+        // Unpair is an explicit credential-destruction boundary. Ordinary
+        // success/failure is not: the same memory-only first-party token should
+        // remain available for the next run while this MV3 worker stays alive.
+        provider?.forgetSession();
         this.syncState = 'idle';
         throw error;
       }
       this.syncState = 'error';
       this.lastFailureCode = redactPortfolioFailure(error);
       throw error;
-    } finally {
-      provider?.forgetSession();
     }
   }
 

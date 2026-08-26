@@ -153,12 +153,6 @@ main {
   gap: 12px;
 }
 
-.heading-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .eyebrow {
   margin: 0 0 2px;
   color: var(--text-tertiary);
@@ -543,94 +537,6 @@ button:disabled {
   grid-template-columns: 1.2fr 1fr;
   gap: 7px;
   margin-top: 10px;
-}
-
-.btn-full {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.p2p-workspace {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.p2p-asset-detail,
-.p2p-review {
-  padding: 10px;
-  border: 1px solid var(--divider);
-  border-radius: 9px;
-  background: var(--bg-raised);
-}
-
-.reason-list {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-  padding-left: 18px;
-  color: var(--amber);
-  font-size: 10px;
-}
-
-.reason-list:empty {
-  display: none;
-}
-
-.reason-list.good {
-  display: block;
-  padding-left: 0;
-  color: var(--green);
-  list-style: none;
-}
-
-.price-input-wrap {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-}
-
-.price-input-wrap input {
-  min-width: 0;
-}
-
-.p2p-review {
-  margin-top: 12px;
-  border-color: rgba(79, 142, 247, 0.35);
-}
-
-.review-grid {
-  display: grid;
-  gap: 6px;
-  margin: 10px 0;
-}
-
-.review-grid > div {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.review-grid dt {
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.review-grid dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-size: 10px;
-  font-weight: 620;
-}
-
-.p2p-safety-note {
-  margin: 9px 0 0;
-  color: var(--amber);
-  font-size: 10px;
-  line-height: 1.4;
 }
 
 .privacy-disclosure {

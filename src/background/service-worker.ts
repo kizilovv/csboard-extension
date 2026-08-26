@@ -11,7 +11,15 @@ import {
   type CompactPrice,
   type PriceEngineSettings,
 } from '../shared/price-engine';
-import { getAuthStatus, logout, unwrapAuthMeUserPayload } from '../shared/api';
+import { getAuthStatus, logout, readAccountForSync, unwrapAuthMeUserPayload } from '../shared/api';
+import {
+  CSBOARD_DIRECT_SYNC_PATH,
+  interpretCsboardDirectSyncResponse,
+  runCsboardDirectSync,
+  type CsboardDirectSyncOutcome,
+  type CsboardDirectSyncRequestBody,
+  type CsboardDirectSyncUploadVerdict,
+} from './csboard-direct-sync';
 import { getTradeHoldItems } from '../shared/steam-api';
 import { fetchSteamSession } from './steam-session';
 import { createMessageRouter } from '../shared/message-bus';
@@ -27,6 +35,10 @@ import { GatewayPayloadError } from '../shared/gateway-dto';
 import {
   isTrustedSteamPageSender,
   normalizeSteamPageCredential,
+  normalizeSteamPageCredentialResponse,
+  STEAM_COMMUNITY_ORIGIN,
+  type SteamPageCredential,
+  type SteamPageCredentialRequest,
 } from '../shared/steam-page-credential';
 import {
   DEFAULT_POPUP_SETTINGS,
@@ -45,7 +57,13 @@ import {
   type SteamOfferDisplayItem,
   type SteamReadSessionProvider,
 } from './steam-read-session-provider';
-import { registerExternalStatusRouter } from './external-router';
+import {
+  registerExternalStatusRouter,
+  type ExternalManualSyncResult,
+  type ExternalSyncRefusalCode,
+  type ExternalSyncStatusSnapshot,
+  type InternalGatewayStatus,
+} from './external-router';
 import { IndexedDbDeviceKeyStore } from './device-key-store';
 import { ProtectedGatewayClient } from './gateway-client';
 import {
@@ -54,7 +72,6 @@ import {
 } from './gateway-controller';
 import { clearGatewayOutbox } from './sync-outbox';
 import { readGatewayBuildConfig } from './gateway-config';
-import { P2PListingController } from './p2p-listing-client';
 
 const logger = createLogger('background');
 
@@ -112,6 +129,92 @@ router.on('REFRESH_PRICES', async () => {
 // The provider owns its memory-only credential. Messages never carry or return it.
 let steamReadProvider: SteamReadSessionProvider | null = null;
 let steamReadProviderAccount: string | null = null;
+const MAX_STEAM_CREDENTIAL_TABS = 5;
+const STEAM_CREDENTIAL_TAB_TIMEOUT_MS = 1_000;
+let steamCredentialRequestInFlight: {
+  readonly steamId: string;
+  readonly promise: Promise<SteamPageCredential | null>;
+} | null = null;
+
+function isTrustedSteamTab(tab: chrome.tabs.Tab): tab is chrome.tabs.Tab & { id: number; url: string } {
+  if (!Number.isSafeInteger(tab.id) || typeof tab.url !== 'string') return false;
+  try {
+    const url = new URL(tab.url);
+    return url.origin === STEAM_COMMUNITY_ORIGIN && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function withSteamCredentialTimeout(promise: Promise<unknown>): Promise<unknown> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      resolve(null);
+    }, STEAM_CREDENTIAL_TAB_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+function requestSteamPageCredential(expectedSteamId: string): Promise<SteamPageCredential | null> {
+  if (steamCredentialRequestInFlight?.steamId === expectedSteamId) {
+    return steamCredentialRequestInFlight.promise;
+  }
+  const pending = performSteamPageCredentialRequest(expectedSteamId);
+  const tracked = pending.finally(() => {
+    if (steamCredentialRequestInFlight?.promise === tracked) {
+      steamCredentialRequestInFlight = null;
+    }
+  });
+  steamCredentialRequestInFlight = { steamId: expectedSteamId, promise: tracked };
+  return tracked;
+}
+
+async function performSteamPageCredentialRequest(
+  expectedSteamId: string,
+): Promise<SteamPageCredential | null> {
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({ url: `${STEAM_COMMUNITY_ORIGIN}/*` });
+  } catch {
+    return null;
+  }
+  const request: SteamPageCredentialRequest = {
+    type: 'REQUEST_STEAM_PAGE_CREDENTIAL',
+    version: 1,
+  };
+  const candidates = tabs.filter(isTrustedSteamTab).slice(0, MAX_STEAM_CREDENTIAL_TABS);
+  const responses = await Promise.all(candidates.map(async (tab) => {
+    try {
+      const response = await withSteamCredentialTimeout(
+        chrome.tabs.sendMessage(tab.id, request),
+      );
+      return normalizeSteamPageCredentialResponse(response);
+    } catch {
+      return null;
+    }
+  }));
+  const matching = responses.find((credential) => credential?.pageSteamId === expectedSteamId);
+  if (matching) return matching;
+  if (responses.some((credential) => credential !== null)) {
+    throw new Error('STEAM_ACCOUNT_MISMATCH');
+  }
+  return null;
+}
 
 /**
  * `pageCredential` is a webapi token a content script read straight out of the
@@ -124,8 +227,8 @@ async function getSteamReadProvider(
   expectedSteamId?: string,
   pageCredential?: { token?: string; steamId?: string },
 ): Promise<SteamReadSessionProvider> {
-  const pageSteamId = pageCredential?.steamId;
-  const pageToken = pageCredential?.token;
+  let pageSteamId = pageCredential?.steamId;
+  let pageToken = pageCredential?.token;
   // A credential bridge has already bound a fresh token to this exact paired
   // account. Re-probing steamcommunity.com from the extension origin here
   // would discard that first-party proof under third-party-cookie blocking.
@@ -133,6 +236,13 @@ async function getSteamReadProvider(
       steamReadProviderAccount === expectedSteamId &&
       steamReadProvider.hasUsableAccessToken?.()) {
     return steamReadProvider;
+  }
+  if (!pageSteamId && !pageToken && expectedSteamId) {
+    const firstParty = await requestSteamPageCredential(expectedSteamId);
+    if (firstParty) {
+      pageSteamId = firstParty.pageSteamId;
+      pageToken = firstParty.pageAccessToken;
+    }
   }
   // A page-supplied identity is first-party proof of who is signed in, so it
   // stands in for the session probe the worker cannot always make.
@@ -150,7 +260,15 @@ async function getSteamReadProvider(
   }
   if (!steamReadProvider || steamReadProviderAccount !== actualSteamId) {
     clearSteamReadProvider();
-    steamReadProvider = createSteamReadSessionProvider({ steamId: actualSteamId });
+    steamReadProvider = createSteamReadSessionProvider({
+      steamId: actualSteamId,
+      requestFirstPartyCredential: async () => {
+        const credential = await requestSteamPageCredential(actualSteamId);
+        return credential
+          ? { token: credential.pageAccessToken, steamId: credential.pageSteamId }
+          : null;
+      },
+    });
     steamReadProviderAccount = actualSteamId;
   }
   if (pageToken && pageSteamId) {
@@ -854,6 +972,16 @@ function portfolioSyncSuccessStatus(
   if (settings.portfolioSources.tradeHistory && !failedSources.has('tradeHistory')) {
     sourceRecords.tradeHistory = result.trades;
   }
+  const sourceWarnings: Partial<Record<PortfolioSource, string>> = {};
+  if (settings.portfolioSources.tradeHistory && !failedSources.has('tradeHistory')) {
+    if (result.warningCodes.includes('TRADE_HISTORY_TRUNCATED')) {
+      sourceWarnings.tradeHistory = 'TRADE_HISTORY_TRUNCATED';
+    } else if (result.warningCodes.includes('OVERSIZED_RECORDS_DROPPED')) {
+      // Accepted offers are hidden enrichment of Trade History, so an
+      // oversized trade or accepted offer belongs on the visible history row.
+      sourceWarnings.tradeHistory = 'OVERSIZED_RECORDS_DROPPED';
+    }
+  }
   return {
     lastAttemptedAt: attemptedAt,
     lastSuccessfulAt: successfulAt,
@@ -861,9 +989,12 @@ function portfolioSyncSuccessStatus(
     sourceErrors: Object.fromEntries(
       result.failedSources
         .filter((source) => source !== 'tradeOffers')
-        .map((source) => [source, 'STEAM_READ_FAILED']),
+        .map((source) => [
+          source,
+          result.sourceFailureCodes[source] ?? 'STEAM_READ_FAILED',
+        ]),
     ),
-    sourceWarnings: {},
+    sourceWarnings,
   };
 }
 
@@ -968,37 +1099,6 @@ router.on('RUN_MANUAL_SYNC', async (msg, sender) => {
     logger.warn('Could not clear automatic portfolio sync state', { error: String(error) });
   });
   return { status: await buildPortfolioPopupStatus() };
-});
-
-// --- P2P listing publication (normal CSBOARD cookie session only) ---
-// The controller stores backend intent IDs and idempotency keys only in this
-// service-worker process for at most two minutes. The popup receives an opaque
-// review handle and must perform a second, separate confirmation gesture.
-const p2pListingController = new P2PListingController();
-
-router.on('GET_P2P_ELIGIBLE_ASSETS', async (msg, sender) => {
-  requirePopupSender(sender);
-  if (msg.version !== 1) throw new Error('UNSUPPORTED_P2P_VERSION');
-  return { assets: await p2pListingController.listEligibleAssets() };
-});
-
-router.on('PREPARE_P2P_LISTING', async (msg, sender) => {
-  requirePopupSender(sender);
-  if (msg.version !== 1) throw new Error('UNSUPPORTED_P2P_VERSION');
-  return { review: await p2pListingController.prepare(msg.data) };
-});
-
-router.on('CONFIRM_P2P_LISTING', async (msg, sender) => {
-  requirePopupSender(sender);
-  if (msg.version !== 1) throw new Error('UNSUPPORTED_P2P_VERSION');
-  return p2pListingController.confirm(msg.data.reviewId);
-});
-
-router.on('CANCEL_P2P_LISTING_REVIEW', async (msg, sender) => {
-  requirePopupSender(sender);
-  if (msg.version !== 1) throw new Error('UNSUPPORTED_P2P_VERSION');
-  p2pListingController.cancel(msg.data.reviewId);
-  return { success: true as const };
 });
 
 // --- Fetch inventory with asset_properties (float, stickers, certificate) ---
@@ -1183,15 +1283,237 @@ router.on('FETCH_STEAM_TRADE_OFFERS', async (msg) => {
 // Start listening
 router.listen();
 
-// The complete externally-connectable surface is one static, read-only status
-// probe for CSBOARD plus bounded CSFolder fresh-pair and paired-reactivation
-// actions. No
-// external caller can unpair, run arbitrary syncs, change sources or reach a
-// Steam credential-bearing provider.
+/**
+ * How long a page-triggered refresh is watched before the answer must be
+ * "started".
+ *
+ * The site allows an external command 8 s and then asks its OWN backend
+ * whether a snapshot arrived, so blocking here until Steam has been read would
+ * turn a working refresh into a timeout. Watching the first few seconds is
+ * still worth it: the refusals a seller can act on — STEAM_SESSION_REQUIRED
+ * above all — are decided at the very start of a run, and returning one
+ * synchronously is the difference between a sentence naming the cause and a
+ * 45-second spinner ending in "sync failed".
+ */
+const EXTERNAL_SYNC_OBSERVE_MS = 4_000;
+
+/** Collapse a sync failure to the closed vocabulary the page may hear. */
+function externalSyncRefusalFor(error: unknown): ExternalSyncRefusalCode {
+  const code = safePortfolioErrorCode(error);
+  if (code === 'STEAM_SESSION_REQUIRED') return 'STEAM_SESSION_REQUIRED';
+  if (code === 'SYNC_NOT_ENABLED') return 'SYNC_NOT_ENABLED';
+  // A revoked device is unpaired as far as the seller is concerned: the fix is
+  // to pair again, which is exactly what NOT_PAIRED tells the site to say.
+  if (code === 'DEVICE_REVOKED') return 'NOT_PAIRED';
+  return 'SYNC_TRIGGER_FAILED';
+}
+
+// ── The direct csboard road ─────────────────────────────────────────────────
+
+/** The one run in flight, so a second press joins it instead of starting a
+ *  second Steam read. Separate from `portfolioSyncInFlight`, which fences the
+ *  CSFolder gateway and must keep meaning only that. */
+let directSyncInFlight: Promise<CsboardDirectSyncOutcome> | null = null;
+/** What the last direct run did, for the site's status poll. */
+let directSyncState: 'idle' | 'syncing' | 'error' = 'idle';
+/** True once a direct run has been accepted, i.e. this browser is a client
+ *  csboard has actually heard from. */
+let directSyncEstablished = false;
+
+/**
+ * POST the snapshot to csboard.
+ *
+ * Deliberately NOT routed through `apiFetch`: that layer retries 5xx, and a
+ * re-uploaded inventory is a second snapshot for the same run; it also
+ * collapses every non-2xx into one message, discarding the `code` that tells
+ * an account mismatch apart from a generic refusal. A seller who presses again
+ * is a better retry than an automatic one.
+ */
+async function uploadCsboardDirectSnapshot(
+  body: CsboardDirectSyncRequestBody,
+): Promise<CsboardDirectSyncUploadVerdict> {
+  const base = await getApiBase();
+  const response = await fetch(`${base}${CSBOARD_DIRECT_SYNC_PATH}`, {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const parsed = await response.json().catch(() => null);
+  return interpretCsboardDirectSyncResponse(response.status, parsed);
+}
+
+/**
+ * Start (or join) one direct run and report a bounded verdict.
+ *
+ * The observation window is the same one the gateway road uses and for the
+ * same reason: every refusal a seller can act on is decided in the first
+ * moments — before csboard answers, before Steam is read — so returning one
+ * synchronously is the difference between a sentence naming the cause and a
+ * 45-second spinner ending in "sync failed".
+ */
+async function requestCsboardDirectSync(): Promise<ExternalManualSyncResult> {
+  if (directSyncInFlight) return { refused: 'ACTION_IN_PROGRESS' };
+  directSyncState = 'syncing';
+  const run = runCsboardDirectSync({
+    readCsboardAccount: readAccountForSync,
+    // The Steam id comes from csboard, never from the page and never from
+    // whichever account the browser happens to be signed into: the provider
+    // refuses outright when the two differ, so a snapshot can never be filed
+    // under an account that did not produce it.
+    openSteamReader: (steamId) => getSteamReadProvider(steamId),
+    upload: uploadCsboardDirectSnapshot,
+    newSyncRunId: () => crypto.randomUUID(),
+  }).catch((): CsboardDirectSyncOutcome => (
+    { ok: false, refused: 'SYNC_TRIGGER_FAILED' }
+  ));
+  const tracked = run.then((outcome) => {
+    if (directSyncInFlight === tracked) directSyncInFlight = null;
+    directSyncState = outcome.ok ? 'idle' : 'error';
+    if (outcome.ok) directSyncEstablished = true;
+    else logger.warn('Direct csboard sync refused', { refused: outcome.refused });
+    return outcome;
+  });
+  directSyncInFlight = tracked;
+
+  const observed = await Promise.race([
+    tracked,
+    new Promise<'pending'>((resolve) => {
+      setTimeout(() => resolve('pending'), EXTERNAL_SYNC_OBSERVE_MS);
+    }),
+  ]);
+  if (observed === 'pending' || observed.ok) return { started: true };
+  return { refused: observed.refused };
+}
+
+/**
+ * Is the CSFolder gateway a road this install can actually drive right now?
+ *
+ * All three conditions, or none: uploads switched on by the owner, at least
+ * one source chosen, and a live pairing registration. Anything less is not a
+ * failure to report — it is simply a seller who does not use CSFolder, and
+ * the direct csboard path below is theirs.
+ */
+async function gatewaySyncAvailable(settings: ExtensionSettings): Promise<boolean> {
+  if (portfolioUnpairing || portfolioUploadsBlocked) return false;
+  if (!settings.portfolioSyncEnabled || !hasEnabledPortfolioSource(settings)) return false;
+  try {
+    return (await (await getGatewayController()).status()).paired;
+  } catch {
+    // An unconfigured or unreachable gateway is not a reason to refuse the
+    // press: the direct path needs none of it.
+    return false;
+  }
+}
+
+/**
+ * The CSBOARD site asking for one inventory refresh.
+ *
+ * TWO ROADS, AND WHICH ONE IS TAKEN.
+ *
+ * A CSFolder user — paired, uploads on — keeps the encrypted gateway exactly
+ * as before, down to the fenced run and the epoch. Everyone else gets the
+ * direct path: read this browser's Steam inventory, post it to csboard, done.
+ * Until 1.1.7 that second group had no road at all and every press was refused
+ * `NOT_PAIRED`, which is why nothing could be listed on the site.
+ *
+ * WHAT IS STILL CHECKED AND NEVER FIXED. The direct path does not enable
+ * portfolio uploads, choose sources, pair, or write one byte of CSFolder
+ * state. Pressing a button on a listing page is consent to send YOUR inventory
+ * to CSBOARD, and that is the only thing it does. A seller who has never
+ * touched CSFolder ends the run exactly as unenrolled as they began it.
+ */
+async function requestExternalManualSync(): Promise<ExternalManualSyncResult> {
+  // One run at a time, whichever road it is on. Repeated presses collapse onto
+  // the run already reading Steam instead of queueing more of them.
+  if (portfolioSyncInFlight || directSyncInFlight) return { refused: 'ACTION_IN_PROGRESS' };
+  let settings: ExtensionSettings;
+  try {
+    settings = await getSettings();
+  } catch {
+    return { refused: 'SYNC_TRIGGER_FAILED' };
+  }
+  if (!await gatewaySyncAvailable(settings)) return requestCsboardDirectSync();
+  if (portfolioSyncInFlight) return { refused: 'ACTION_IN_PROGRESS' };
+  const epoch = portfolioSyncEpoch;
+  // Attach the verdict handler immediately: the run outlives this function
+  // whenever it is slower than the observation window, and an unhandled
+  // rejection in an MV3 worker is a crash report nobody reads.
+  const observed = runPortfolioSync(epoch).then(
+    () => null,
+    (error: unknown): ExternalSyncRefusalCode => (
+      error instanceof PortfolioSyncCancelledError
+        ? 'SYNC_TRIGGER_FAILED'
+        : externalSyncRefusalFor(error)
+    ),
+  );
+  const outcome = await Promise.race([
+    observed,
+    new Promise<'pending'>((resolve) => {
+      setTimeout(() => resolve('pending'), EXTERNAL_SYNC_OBSERVE_MS);
+    }),
+  ]);
+  // `null` is a run that finished inside the window; 'pending' is one still
+  // reading Steam. Both are "started" — the site verifies the snapshot itself.
+  return outcome === 'pending' || outcome === null
+    ? { started: true }
+    : { refused: outcome };
+}
+
+/**
+ * The two facts the site may know about a run it asked for.
+ *
+ * `paired` answers the only question the site can act on — "is this browser a
+ * client that can produce a snapshot" — so a direct install that csboard has
+ * accepted a snapshot from answers true, exactly as a CSFolder-paired one
+ * does. It never says true merely because the add-on is installed.
+ *
+ * The gateway is asked FIRST and its live run wins, so a CSFolder user's
+ * status keeps reading exactly as it did. A missing or unconfigured gateway is
+ * no longer fatal here: it used to throw and the site rendered
+ * SYNC_STATUS_UNAVAILABLE at every seller who had never paired.
+ */
+async function readExternalSyncStatus(): Promise<ExternalSyncStatusSnapshot> {
+  let gateway: InternalGatewayStatus | null = null;
+  try {
+    gateway = await (await getGatewayController()).status();
+  } catch {
+    gateway = null;
+  }
+  if (gateway?.paired && directSyncState === 'idle') {
+    return { paired: true, syncState: gateway.syncState };
+  }
+  return {
+    paired: gateway?.paired === true || directSyncEstablished,
+    syncState: directSyncState,
+  };
+}
+
+// The complete externally-connectable surface:
+//   csboard.com / csboard.trade — read-only status probe, plus (new in 1.1.6)
+//     RUN_MANUAL_SYNC and GET_PORTFOLIO_SYNC_STATUS. Listing an item on the
+//     site needs an inventory snapshot under five minutes old and only a
+//     client holding the seller's Steam session can make one, so the site may
+//     now CAUSE a refresh and watch for it to end. It still cannot pair,
+//     unpair, choose sources, enable uploads, or read one byte of Steam data:
+//     the snapshot goes to the encrypted gateway exactly as before, and the
+//     site learns the outcome from its own backend.
+//   csfolder.com — bounded fresh-pair and paired-reactivation actions.
+// Two lists of origins, not one, so authorising a site to see whether the
+// add-on exists never also authorises it to make this browser read Steam.
 registerExternalStatusRouter({
   statusAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
   pairingAllowedOrigins: ['https://csfolder.com'],
+  // Both CSBOARD hosts: the two domains are one product split by geo (nginx
+  // 302s an RU visitor to csboard.trade), so pinning only csboard.com would
+  // leave every RU seller unable to list.
+  syncAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
   extensionVersion: chrome.runtime.getManifest().version,
+  syncHandlers: {
+    requestManualSync: requestExternalManualSync,
+    readSyncStatus: readExternalSyncStatus,
+  },
   handlers: {
     async isPaired() {
       if (portfolioUnpairing) return false;

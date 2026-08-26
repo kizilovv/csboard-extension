@@ -15,11 +15,11 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 - Opt-in BetterBuff-style helpers on Buff163: listing age, selected-currency display, explicit live-price comparisons and safe item/search links. The Buff surface is off by default and never uploads Buff responses.
 - Steam `Sell`, `Quick Sell`, `Instant Sell` and sequential bulk review. Every write is initiated and confirmed by the user and goes directly to Steam.
 - Optional CSFolder-authorized portfolio pairing and synchronization of normalized own-inventory contexts `2` and `16` plus up to 100 most recent Steam trades. When Trade History is enabled, accepted offers from the last 30 days add correlation metadata: an optional completed trade ID and allowlisted Buff163/CSFloat marketplace hint. Active trade offers and raw Steam offer notes/messages are not uploaded, and Steam Market history remains unavailable. Uploads and both visible sources are off by default; after explicit opt-in the same safe path supports Sync now and automatic sync about once per hour.
-- P2P eligibility plus reviewed publish/unpublish for the user's CSBOARD listing. Version 1.1 has no P2P buy/order/settlement capability and does not let CSBOARD or a website create, accept or confirm a Steam trade.
+- On request from an exact CSBOARD origin, an immediate inventory sync so a listing on the website can be backed by a fresh snapshot. The site is told only that a run started and whether it is still going. Listing publication itself was removed from the extension in 1.1.6; no build can create, buy, settle or cancel a listing or order, and neither CSBOARD nor any website can create, accept or confirm a Steam trade.
 
 ## Security boundary
 
-- `onMessageExternal` exposes a bounded `GET_EXTENSION_STATUS` response to the two exact CSBOARD origins and one exact-schema `PAIR_AND_ENABLE_PORTFOLIO_SYNC` action to `https://csfolder.com`. That action accepts only a single-use CSFolder code, enables exactly Inventory + Trade History and triggers the existing fenced sync path; it cannot unpair, select arbitrary sources, sell, trade or expose Steam credentials.
+- `onMessageExternal` exposes to the two exact CSBOARD origins a bounded `GET_EXTENSION_STATUS` response plus, since 1.1.6, `RUN_MANUAL_SYNC` and `GET_PORTFOLIO_SYNC_STATUS`. Those two check their preconditions instead of fixing them: an unpaired install, or one with uploads off, is refused with a code and nothing is enabled on its behalf, and neither returns Steam data to the page. `https://csfolder.com` gets one exact-schema `PAIR_AND_ENABLE_PORTFOLIO_SYNC` action, which accepts only a single-use CSFolder code, enables exactly Inventory + Trade History and triggers the existing fenced sync path. No origin can unpair, select arbitrary sources, sell, trade or expose Steam credentials.
 - Steam cookies, `sessionid`, access/session tokens, passwords and Steam Guard/shared/identity secrets never leave the browser and never enter the sync outbox.
 - A narrow internal read-session provider can add a session-only Steam credential only to fixed read operations. Callers never receive the credential.
 - Version 1.1.4 restores hourly sync with third-party cookies blocked: an exact-origin Steam content script offers the page's short-lived credential to the worker, where it is account-bound, memory-only and never logged, stored locally or uploaded.
@@ -35,7 +35,6 @@ CS2 trading helper for Steam Community, CSFloat and Buff163. Version 1.1 combine
 | CSBOARD `/api/extension/*` | Public price/rate feeds and extension health |
 | CSBOARD `/api/auth/*` | Optional cookie-authenticated user/settings and logout |
 | CSBOARD `/api/extension/v2/*` | Opt-in encrypted pairing confirmation, device status/revoke and normalized portfolio ingestion |
-| CSBOARD `/api/p2p/*` | Cookie-authenticated eligibility and separately reviewed listing publish/unpublish only |
 | Steam Community / Web API | Page overlays, fixed authenticated reads and direct user-confirmed market actions |
 | CSFloat | The visited marketplace page, its public metadata, and exact search links |
 | Buff163 | Opt-in local enhancement of the visited Buff page and its same-origin marketplace responses |

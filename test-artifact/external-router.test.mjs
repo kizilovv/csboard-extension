@@ -100,6 +100,14 @@ test('real bundled service worker exposes only reviewed bounded external message
     { type: 'PREPARE_P2P_LISTING', version: 1, data: {} },
     { type: 'CONFIRM_P2P_LISTING', version: 1, data: { reviewId: 'external-review' } },
     { type: 'CANCEL_P2P_LISTING_REVIEW', version: 1, data: { reviewId: 'external-review' } },
+    // The two commands CSBOARD did gain are exact-shape. Anything carrying a
+    // parameter is refused before the handler, so a page cannot smuggle a
+    // source list or an identity into a command that takes none.
+    { version: 1, type: 'RUN_MANUAL_SYNC', requestId: 'x', payload: {} },
+    { version: 1, type: 'RUN_MANUAL_SYNC', requestId: 'x', sources: ['inventory'] },
+    { version: 1, type: 'RUN_MANUAL_SYNC' },
+    { version: 2, type: 'RUN_MANUAL_SYNC', requestId: 'x' },
+    { version: 1, type: 'GET_PORTFOLIO_SYNC_STATUS', requestId: 'x', payload: {} },
     { version: 1, type: 'GET_EXTENSION_STATUS', requestId: 'x', payload: {}, extra: true },
     { version: 1, type: 'GET_EXTENSION_STATUS', requestId: 'x'.repeat(65), payload: {} },
     { version: 1, type: 'GET_EXTENSION_STATUS', requestId: 'x', payload: { nested: true } },
@@ -120,6 +128,18 @@ test('real bundled service worker exposes only reviewed bounded external message
   }, 'https://steamcommunity.com/id/example');
   assert.equal(wrongOrigin?.ok, false);
   assert.equal(wrongOrigin?.error?.code, 'UNAUTHORIZED_ORIGIN');
+
+  // Sync is CSBOARD's, not CSFolder's: the origin lists are separate on
+  // purpose and neither site inherits the other's commands.
+  for (const type of ['RUN_MANUAL_SYNC', 'GET_PORTFOLIO_SYNC_STATUS']) {
+    const csfolderCannotSync = await dispatch(listeners.external, {
+      version: 1,
+      type,
+      requestId: 'wrong_sync_origin',
+    }, 'https://csfolder.com/portfolio');
+    assert.equal(csfolderCannotSync?.ok, false, `${type} was not origin-pinned`);
+    assert.equal(csfolderCannotSync?.error?.code, 'UNAUTHORIZED_ORIGIN');
+  }
 
   const csboardCannotPair = await dispatch(listeners.external, {
     version: 1,
@@ -157,8 +177,10 @@ test('real bundled service worker exposes only reviewed bounded external message
   assert.equal(callerCannotChooseSources?.error?.code, 'INVALID_MESSAGE');
 
   assert.equal(typeof listeners.internal, 'function', 'onMessage listener missing');
+  // An extension page that is not the popup still cannot drive the popup-only
+  // internal commands, even now that the site can trigger a sync of its own.
   const internalNonPopup = await dispatch(listeners.internal, {
-    type: 'GET_P2P_ELIGIBLE_ASSETS',
+    type: 'RUN_MANUAL_SYNC',
     version: 1,
   }, 'chrome-extension://artifact-test/pages/trade-history.html', 'artifact-test');
   assert.deepEqual(internalNonPopup, { error: 'POPUP_ONLY_OPERATION' });

@@ -13,6 +13,20 @@ export const EXTERNAL_PAIR_AND_ENABLE_MESSAGE_TYPE =
   'PAIR_AND_ENABLE_PORTFOLIO_SYNC' as const;
 export const EXTERNAL_REACTIVATE_MESSAGE_TYPE =
   'REACTIVATE_PORTFOLIO_SYNC' as const;
+/**
+ * The two commands the CSBOARD site may send.
+ *
+ * They deliberately carry the SAME names the popup uses on the internal
+ * router: one action, one word, so a reader grepping for RUN_MANUAL_SYNC finds
+ * every caller. They are still two different listeners with two different
+ * authorisations — the internal ones keep requiring
+ * `sender.id === chrome.runtime.id`, which no web page can satisfy, and these
+ * keep requiring an origin in `syncAllowedOrigins`. Neither name is a shortcut
+ * into the other listener.
+ */
+export const EXTERNAL_RUN_SYNC_MESSAGE_TYPE = 'RUN_MANUAL_SYNC' as const;
+export const EXTERNAL_SYNC_STATUS_MESSAGE_TYPE =
+  'GET_PORTFOLIO_SYNC_STATUS' as const;
 const EXTERNAL_PROTOCOL_VERSION = 1 as const;
 const MAX_EXTERNAL_REQUEST_BYTES = 2_048;
 
@@ -24,7 +38,46 @@ export type ExternalStatusErrorCode =
   | 'NOT_PAIRED'
   | 'PAIRING_FAILED'
   | 'ACTIVATION_FAILED'
-  | 'SYNC_TRIGGER_FAILED';
+  | 'SYNC_TRIGGER_FAILED'
+  | 'SYNC_NOT_ENABLED'
+  | 'STEAM_SESSION_REQUIRED'
+  | 'CSBOARD_SIGN_IN_REQUIRED'
+  | 'STEAM_ACCOUNT_NOT_LINKED'
+  | 'STEAM_ACCOUNT_MISMATCH'
+  | 'INVENTORY_TOO_LARGE'
+  | 'SYNC_STATUS_UNAVAILABLE';
+
+/**
+ * Every refusal a manual-sync handler is allowed to name.
+ *
+ * A refusal is the one thing a page learns about the user's Steam session, so
+ * the vocabulary is closed: anything a handler returns that is not in this
+ * list collapses to SYNC_TRIGGER_FAILED. STEAM_SESSION_REQUIRED earns its own
+ * word because it is the only refusal the seller can act on — it means "open a
+ * signed-in steamcommunity.com tab", and a generic failure sends them looking
+ * at their csboard account instead.
+ */
+export const EXTERNAL_SYNC_REFUSAL_CODES = [
+  'ACTION_IN_PROGRESS',
+  'NOT_PAIRED',
+  'SYNC_NOT_ENABLED',
+  'STEAM_SESSION_REQUIRED',
+  // The direct csboard road's four (1.1.7). Each is here because the seller
+  // does something DIFFERENT about it, and a seller told the wrong thing goes
+  // and fixes an account that was never broken:
+  //   sign in to csboard · link a Steam account · sign Steam into the right
+  //   account · the inventory is past the ingest ceiling.
+  // Note what is still absent: no Steam id, no item, no count, no upstream
+  // status. A refusal is the one thing a page learns about the Steam session,
+  // so it stays a bare word.
+  'CSBOARD_SIGN_IN_REQUIRED',
+  'STEAM_ACCOUNT_NOT_LINKED',
+  'STEAM_ACCOUNT_MISMATCH',
+  'INVENTORY_TOO_LARGE',
+  'SYNC_TRIGGER_FAILED',
+] as const;
+
+export type ExternalSyncRefusalCode = typeof EXTERNAL_SYNC_REFUSAL_CODES[number];
 
 export type ExternalStatusResponse =
   | {
@@ -47,6 +100,27 @@ export type ExternalStatusResponse =
         readonly enabledSources: readonly ['inventory', 'tradeHistory'];
         /** The initial run was handed to the existing fenced sync path. */
         readonly syncTriggered: true;
+      };
+    }
+  | {
+      readonly version: 1;
+      readonly requestId: string;
+      readonly ok: true;
+      /**
+       * A refresh is running. NOT "the snapshot arrived": the run is handed to
+       * the same fenced path the popup uses and finishes on its own clock, and
+       * only the CSBOARD backend can say a snapshot was accepted.
+       */
+      readonly data: { readonly syncTriggered: true };
+    }
+  | {
+      readonly version: 1;
+      readonly requestId: string;
+      readonly ok: true;
+      /** Exactly two facts. No Steam id, no item, no failure detail. */
+      readonly data: {
+        readonly paired: boolean;
+        readonly syncState: 'idle' | 'syncing' | 'error';
       };
     }
   | {
@@ -103,6 +177,37 @@ interface ExternalReactivateMessage {
   readonly requestId: string;
 }
 
+export type ExternalManualSyncResult =
+  | { readonly started: true }
+  | { readonly refused: ExternalSyncRefusalCode };
+
+export interface ExternalSyncStatusSnapshot {
+  readonly paired: boolean;
+  readonly syncState: 'idle' | 'syncing' | 'error';
+}
+
+/**
+ * The whole of what the CSBOARD site may do here: cause a refresh, and ask
+ * whether one is running.
+ *
+ * Both are deliberately WRITE-NOTHING-BACK: `requestManualSync` returns a
+ * verdict, never inventory, and `readSyncStatus` returns two enum-ish facts.
+ * The site does not need Steam data from the extension — it re-reads its own
+ * backend once the snapshot lands there — so no handler here may hand a page
+ * anything a Steam session produced.
+ */
+export interface ExternalSyncHandlers {
+  /**
+   * Start ONE refresh through the existing fenced sync path.
+   *
+   * Must resolve quickly whether or not the run has finished: the caller is a
+   * web page with a short timeout that then watches its own backend.
+   */
+  requestManualSync(): Promise<ExternalManualSyncResult>;
+  /** Whether this browser is paired, and what the last/current run is doing. */
+  readSyncStatus(): Promise<ExternalSyncStatusSnapshot>;
+}
+
 export interface ExternalPairAndEnableHandlers {
   /** Local gateway registration is the only accepted proof of pairing. */
   isPaired(): Promise<boolean>;
@@ -125,6 +230,27 @@ function isExactExternalReactivateMessage(
     record['version'] === EXTERNAL_PROTOCOL_VERSION &&
     record['type'] === EXTERNAL_REACTIVATE_MESSAGE_TYPE &&
     isSafeExternalRequestId(record['requestId']);
+}
+
+/**
+ * A message that is nothing but `{ version, type, requestId }`.
+ *
+ * The exactness is the point: an unknown extra key is rejected rather than
+ * ignored, so a page cannot smuggle a source list, a Steam id or a price into
+ * a command that has no parameters and must never grow one by accident.
+ */
+function isExactBareExternalMessage(value: unknown, type: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).sort().join(',') === 'requestId,type,version' &&
+    record['version'] === EXTERNAL_PROTOCOL_VERSION &&
+    record['type'] === type &&
+    isSafeExternalRequestId(record['requestId']);
+}
+
+function isExternalSyncRefusalCode(value: unknown): value is ExternalSyncRefusalCode {
+  return typeof value === 'string' &&
+    (EXTERNAL_SYNC_REFUSAL_CODES as readonly string[]).includes(value);
 }
 
 function isSafeExternalRequestId(value: unknown): value is string {
@@ -251,10 +377,69 @@ async function failClosedAfterActivationError(
   }
 }
 
+/** Which origins may send which command. One switch, so the answer to "what
+ *  can this site do?" is read in one place. */
+function allowedOriginsForExternalType(
+  type: string | null,
+  options: {
+    readonly statusAllowedOrigins: ReadonlySet<string>;
+    readonly pairingAllowedOrigins: ReadonlySet<string>;
+    readonly syncAllowedOrigins: ReadonlySet<string>;
+  },
+): ReadonlySet<string> {
+  switch (type) {
+    case EXTERNAL_STATUS_MESSAGE_TYPE:
+      return options.statusAllowedOrigins;
+    case EXTERNAL_PAIR_AND_ENABLE_MESSAGE_TYPE:
+    case EXTERNAL_REACTIVATE_MESSAGE_TYPE:
+      return options.pairingAllowedOrigins;
+    case EXTERNAL_RUN_SYNC_MESSAGE_TYPE:
+    case EXTERNAL_SYNC_STATUS_MESSAGE_TYPE:
+      return options.syncAllowedOrigins;
+    default:
+      // An unknown type from any origin we speak to at all is INVALID_MESSAGE,
+      // not UNAUTHORIZED_ORIGIN, so a site probing for a newer protocol can
+      // tell "this build does not have it" from "you may not ask".
+      return new Set([
+        ...options.statusAllowedOrigins,
+        ...options.pairingAllowedOrigins,
+        ...options.syncAllowedOrigins,
+      ]);
+  }
+}
+
 /**
- * Complete external dispatcher. CSBOARD retains a read-only status probe;
- * CSFolder gets bounded fresh-pair and already-paired activation commands and
- * nothing else.
+ * Complete external dispatcher — the entire list of things a web page can make
+ * this extension do.
+ *
+ * Until 1.1.5 the line was "CSBOARD gets a read-only status probe and nothing
+ * else". It moved, on purpose, in exactly one direction: CSBOARD may now also
+ * CAUSE an inventory refresh (RUN_MANUAL_SYNC) and ask whether one is running
+ * (GET_PORTFOLIO_SYNC_STATUS). Publishing a lot on the site needs an inventory
+ * snapshot under five minutes old, and only a client with the seller's Steam
+ * session — this extension, or the phone app — can make one; the site had no
+ * way to ask for it and refused every listing instead.
+ *
+ * What did NOT move, and must not without another deliberate widening:
+ *   - No page can pair or unpair. Pairing stays CSFolder-authoritative.
+ *   - No page can change which sources are enabled, or turn uploads on. In
+ *     1.1.7 a refresh from an install that is not enrolled in CSFolder no
+ *     longer fails — it takes the DIRECT csboard road, which reads the
+ *     inventory and posts it to csboard's own session-authenticated ingest —
+ *     but it still does not enable itself the way the CSFolder activation path
+ *     does. A press on a listing page is consent to send YOUR inventory to
+ *     CSBOARD and to nothing else; the seller ends the run exactly as
+ *     unenrolled in CSFolder as they began it.
+ *   - No Steam data flows back to the page. The two answers here are a
+ *     "started" flag and (paired, syncState); the snapshot itself goes only to
+ *     the CSBOARD gateway, encrypted, exactly as before. The site learns the
+ *     result by re-reading its own backend, which is also the only party that
+ *     can confirm a snapshot actually landed.
+ * The rule of thumb for the next reader: a page may ask for an ACTION it could
+ * already trigger by hand in the popup. It may never ask for DATA.
+ *
+ * CSFolder keeps its bounded fresh-pair and already-paired activation commands
+ * and nothing else, and cannot send either of the two new commands.
  */
 export async function dispatchExternalMessage(
   message: unknown,
@@ -262,18 +447,15 @@ export async function dispatchExternalMessage(
   options: {
     readonly statusAllowedOrigins: ReadonlySet<string>;
     readonly pairingAllowedOrigins: ReadonlySet<string>;
+    readonly syncAllowedOrigins: ReadonlySet<string>;
     readonly extensionVersion: string;
     readonly handlers: ExternalPairAndEnableHandlers;
+    readonly syncHandlers: ExternalSyncHandlers;
   },
 ): Promise<ExternalStatusResponse> {
   const requestId = safeExternalRequestId(message);
   const type = externalMessageType(message);
-  const allowed = type === EXTERNAL_STATUS_MESSAGE_TYPE
-    ? options.statusAllowedOrigins
-    : type === EXTERNAL_PAIR_AND_ENABLE_MESSAGE_TYPE ||
-        type === EXTERNAL_REACTIVATE_MESSAGE_TYPE
-      ? options.pairingAllowedOrigins
-      : new Set([...options.statusAllowedOrigins, ...options.pairingAllowedOrigins]);
+  const allowed = allowedOriginsForExternalType(type, options);
   if (!senderOrigin || !allowed.has(senderOrigin)) {
     return externalError(requestId, 'UNAUTHORIZED_ORIGIN');
   }
@@ -298,6 +480,57 @@ export async function dispatchExternalMessage(
       extensionVersion: options.extensionVersion,
     });
   }
+
+  if (type === EXTERNAL_RUN_SYNC_MESSAGE_TYPE) {
+    if (requestId === null ||
+        !isExactBareExternalMessage(message, EXTERNAL_RUN_SYNC_MESSAGE_TYPE)) {
+      return externalError(requestId, 'INVALID_MESSAGE');
+    }
+    let result: ExternalManualSyncResult;
+    try {
+      result = await options.syncHandlers.requestManualSync();
+    } catch {
+      // A handler that threw has already lost the argument about what to say:
+      // its message could name a storage path, a gateway host or a Steam
+      // response. One bounded verdict leaves.
+      return externalError(requestId, 'SYNC_TRIGGER_FAILED');
+    }
+    const outcome = result as { started?: unknown; refused?: unknown } | null | undefined;
+    if (outcome && outcome.started === true) {
+      return { version: 1, requestId, ok: true, data: { syncTriggered: true } };
+    }
+    return externalError(
+      requestId,
+      isExternalSyncRefusalCode(outcome?.refused) ? outcome.refused : 'SYNC_TRIGGER_FAILED',
+    );
+  }
+
+  if (type === EXTERNAL_SYNC_STATUS_MESSAGE_TYPE) {
+    if (requestId === null ||
+        !isExactBareExternalMessage(message, EXTERNAL_SYNC_STATUS_MESSAGE_TYPE)) {
+      return externalError(requestId, 'INVALID_MESSAGE');
+    }
+    let snapshot: ExternalSyncStatusSnapshot;
+    try {
+      snapshot = await options.syncHandlers.readSyncStatus();
+    } catch {
+      return externalError(requestId, 'SYNC_STATUS_UNAVAILABLE');
+    }
+    // Re-derive both fields rather than forwarding the handler's object: the
+    // answer to a web page is built here, from a closed set of values, and
+    // cannot grow a field because something upstream started returning one.
+    const syncState = (snapshot as { syncState?: unknown } | null)?.syncState;
+    return {
+      version: 1,
+      requestId,
+      ok: true,
+      data: {
+        paired: (snapshot as { paired?: unknown } | null)?.paired === true,
+        syncState: syncState === 'syncing' || syncState === 'error' ? syncState : 'idle',
+      },
+    };
+  }
+
   const isFreshPair = isExactExternalPairAndEnableMessage(message);
   const isReactivation = isExactExternalReactivateMessage(message);
   if (!isFreshPair && !isReactivation) {
@@ -354,15 +587,24 @@ function exactHttpsOrigins(values: readonly string[]): Set<string> {
   }));
 }
 
-/** Registers the complete external surface: status + two bounded CSFolder activations. */
+/**
+ * Registers the complete external surface: the CSBOARD status probe, the two
+ * CSBOARD sync commands, and two bounded CSFolder activations.
+ */
 export function registerExternalStatusRouter(options: {
   readonly statusAllowedOrigins: readonly string[];
   readonly pairingAllowedOrigins: readonly string[];
+  /** Kept a separate list from `statusAllowedOrigins` even where the two hold
+   *  the same origins: adding a site that may see whether the add-on is
+   *  installed must never, by itself, hand that site a Steam read. */
+  readonly syncAllowedOrigins: readonly string[];
   readonly extensionVersion: string;
   readonly handlers: ExternalPairAndEnableHandlers;
+  readonly syncHandlers: ExternalSyncHandlers;
 }): () => void {
   const statusAllowedOrigins = exactHttpsOrigins(options.statusAllowedOrigins);
   const pairingAllowedOrigins = exactHttpsOrigins(options.pairingAllowedOrigins);
+  const syncAllowedOrigins = exactHttpsOrigins(options.syncAllowedOrigins);
   let activationInFlight: Promise<ExternalStatusResponse> | null = null;
 
   const listener = (
@@ -387,8 +629,10 @@ export function registerExternalStatusRouter(options: {
     const pending = dispatchExternalMessage(message, senderOrigin, {
       statusAllowedOrigins,
       pairingAllowedOrigins,
+      syncAllowedOrigins,
       extensionVersion: options.extensionVersion,
       handlers: options.handlers,
+      syncHandlers: options.syncHandlers,
     });
     if (shouldTrackActivation) activationInFlight = pending;
     pending
