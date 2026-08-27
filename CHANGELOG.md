@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.1.13
+
+- The toolbar icon now carries a count of the sales waiting on you, and the
+  extension can raise a desktop notification the moment one arrives. Both read
+  the same delivery queue your own csboard session returns — sales that need
+  you to accept or send, not ones parked in Steam's hold, because a number that
+  never falls is a number people stop reading. The notification is announced
+  once per order rather than once per poll, and clicking it opens that order.
+- New `notifications` permission, for exactly that. It is used nowhere else.
+- Sale notifications have their own switch in the settings panel, separate from
+  the page overlays: this one leaves the browser and lands on your desktop, so
+  it gets its own consent. Turning it off leaves the icon count in place.
+
+## 1.1.12
+
+- A master switch for everything the extension draws on other sites. Off, no
+  overlay, float badge or comparison link is added to Steam, CSFloat or Buff;
+  the per-site toggles keep their own state underneath, so switching back on
+  restores what you had. It deliberately does not touch P2P delivery: sales you
+  have already accepted keep being delivered, and a Steam offer for an order
+  csboard has closed still gets cancelled.
+- Opening an item on CSFloat no longer narrows the comparable search to a
+  knife's own float. A knife's price moves with its pattern and its wear band,
+  not the third decimal, and the clamp was hiding most of the market. Gloves
+  keep it.
+- Sales that csboard has closed while their Steam offer was still live are now
+  cancelled from your browser, and the cancellation is confirmed by re-reading
+  Steam's own state rather than trusting the request that sent it.
+
 ## 1.1.6 — Store release
 
 - The CSBOARD website can now ask the extension to refresh the Steam inventory

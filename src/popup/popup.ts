@@ -154,6 +154,9 @@ function normalizeSettings(value: unknown, fallback: PopupSettingsV2): PopupSett
     enhancementsEnabled: typeof value.enhancementsEnabled === 'boolean'
       ? value.enhancementsEnabled
       : fallback.enhancementsEnabled,
+    salesNotifications: typeof value.salesNotifications === 'boolean'
+      ? value.salesNotifications
+      : fallback.salesNotifications,
     followCsboardSettings: typeof value.followCsboardSettings === 'boolean'
       ? value.followCsboardSettings
       : fallback.followCsboardSettings,
@@ -421,6 +424,7 @@ function renderSettings(): void {
   const currency = element<HTMLSelectElement>('#currency-select');
   const priceSource = element<HTMLSelectElement>('#price-source-select');
   const enhancements = element<HTMLInputElement>('#enhancements-toggle');
+  const salesNotifications = element<HTMLInputElement>('#sales-notifications-toggle');
   const follow = element<HTMLInputElement>('#sync-preferences-toggle');
   const showCsfloat = element<HTMLInputElement>('#csfloat-overlay-toggle');
   const showBetterBuff = element<HTMLInputElement>('#betterbuff-toggle');
@@ -429,6 +433,7 @@ function renderSettings(): void {
   currency.value = settings.currency;
   priceSource.value = settings.priceSource;
   enhancements.checked = settings.enhancementsEnabled;
+  salesNotifications.checked = settings.salesNotifications;
   follow.checked = settings.followCsboardSettings;
   showCsfloat.checked = settings.showCsboardPricesOnCsfloat;
   showBetterBuff.checked = settings.showBetterBuffOnBuff;
@@ -437,6 +442,7 @@ function renderSettings(): void {
   currency.disabled = unavailableOrBusy || settings.followCsboardSettings;
   priceSource.disabled = unavailableOrBusy || settings.followCsboardSettings;
   enhancements.disabled = unavailableOrBusy;
+  salesNotifications.disabled = unavailableOrBusy;
   follow.disabled = unavailableOrBusy;
   showCsfloat.disabled = unavailableOrBusy;
   showBetterBuff.disabled = unavailableOrBusy;
@@ -798,6 +804,18 @@ function bindEvents(): void {
   element<HTMLSelectElement>('#price-source-select').addEventListener('change', (event) => {
     const value = (event.currentTarget as HTMLSelectElement).value;
     if (isSupportedPriceSource(value)) void updateSettings({ priceSource: value });
+  });
+
+  element<HTMLInputElement>('#sales-notifications-toggle').addEventListener('change', (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void updateSettings(
+      { salesNotifications: enabled },
+      {
+        successMessage: enabled
+          ? 'You will be notified when a sale needs you.'
+          : 'Sale notifications off. The icon still shows the count.',
+      },
+    );
   });
 
   element<HTMLInputElement>('#enhancements-toggle').addEventListener('change', (event) => {

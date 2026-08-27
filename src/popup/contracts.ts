@@ -53,6 +53,8 @@ export interface PopupSettingsV2 {
   readonly priceSource: SupportedPriceSource;
   /** Master switch for every on-page enhancement. Delivery is unaffected. */
   readonly enhancementsEnabled: boolean;
+  /** Desktop notification when a sale needs the seller. */
+  readonly salesNotifications: boolean;
   readonly followCsboardSettings: boolean;
   readonly showCsboardPricesOnCsfloat: boolean;
   readonly showBetterBuffOnBuff: boolean;
@@ -81,6 +83,7 @@ export const DEFAULT_POPUP_SETTINGS: PopupSettingsV2 = {
   // Existing installs currently follow /auth/me. Migration must preserve that
   // behaviour unless the user explicitly turns it off.
   enhancementsEnabled: true,
+  salesNotifications: true,
   followCsboardSettings: true,
   showCsboardPricesOnCsfloat: true,
   showBetterBuffOnBuff: false,

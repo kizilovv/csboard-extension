@@ -172,3 +172,53 @@ test('the master switch is wired, not just drawn', () => {
   // Names what the switch does NOT stop.
   assert.match(popupSource, /Sale delivery still works/);
 });
+
+/*
+  The sales counter on the toolbar icon.
+
+  Two things it must not become: a badge that pastes a permanent "0" on the
+  icon, and a badge on the tracker's clock — that clock drops to hourly exactly
+  when a seller has nothing in flight, which is when a NEW sale most needs
+  announcing.
+*/
+test('the sales badge counts the delivery queue on its own clock', () => {
+  const badgeSource = readFileSync(
+    new URL('../src/background/p2p-sales-badge.ts', import.meta.url),
+    'utf8',
+  );
+
+  // The queue that needs a human, not the ones parked in Steam's hold.
+  assert.match(badgeSource, /scope=delivery/);
+  // Empty string clears; '0' would sit on the icon forever.
+  assert.match(badgeSource, /count > 0 \? \(count > 99 \? '99\+' : String\(count\)\) : ''/);
+  // A failed read keeps the last known count rather than claiming zero sales.
+  assert.match(badgeSource, /if \(sales === null\) return 'signed_out';/);
+  // Its own alarm, and it backs off when nobody is signed in.
+  assert.match(badgeSource, /P2P_SALES_BADGE_ALARM/);
+  // The page-drawing master switch has no say over the extension's own icon.
+  assert.doesNotMatch(badgeSource, /enhancementsEnabled/);
+
+  /*
+    Notifications: announced once per ORDER, never per pass.
+
+    A count-based check cannot tell a second sale from the first one still
+    sitting unhandled, and re-announcing every five minutes is how an extension
+    gets uninstalled. The seen-set is keyed by order id and pruned to the live
+    queue, and the whole thing has its own opt-out separate from the page
+    switch, because this one leaves the browser.
+  */
+  assert.match(badgeSource, /const NOTIFIED_KEY = 'csboard_p2p_notified_sales';/);
+  assert.match(badgeSource, /sales\.filter\(\(sale\) => !alreadyTold\.has\(sale\.orderId\)\)/);
+  assert.match(badgeSource, /getSettings\(\)\)\.salesNotifications !== false/);
+  assert.match(badgeSource, /chrome\.notifications\.create\(/);
+  // Clicking it lands on the order it is about.
+  assert.match(badgeSource, /p2p\/order\/\$\{orderId\}/);
+
+  const workerSource = readFileSync(
+    new URL('../src/background/service-worker.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(workerSource, /case P2P_SALES_BADGE_ALARM:/);
+  // Painted on wake too, not only on the first alarm.
+  assert.match(workerSource, /await registerAlarms\(\);\n  void runSalesBadgePass\(\);/);
+});

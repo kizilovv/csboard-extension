@@ -120,6 +120,7 @@ No other origin may send messages to the extension. CSBOARD origins can request 
 |---|---|
 | `storage`, `unlimitedStorage` | Local public price cache, settings, bounded outbox/status and session-only credential state |
 | `alarms` | Manifest V3-safe price refresh, automatic portfolio sync about once per hour after explicit opt-in, and bounded retry scheduling |
+| `notifications` | A desktop notification when one of your own sales needs you — the item name and a link to that order. No page content is read and nothing is sent anywhere; the notification is raised locally from the sales list your own csboard session returns. Switch it off in the extension settings. |
 | Declared host permissions | Run only the documented Steam/CSFloat/opt-in Buff163 features and communicate with the two CSBOARD production origins |
 
 ## No remote executable code

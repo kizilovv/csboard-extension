@@ -15,6 +15,11 @@ import {
 } from './p2p-trade-tracker';
 import { runP2PCancellations } from './p2p-trade-cancel';
 import {
+  P2P_SALES_BADGE_ALARM,
+  registerSalesBadgeAlarm,
+  runSalesBadgePass,
+} from './p2p-sales-badge';
+import {
   priceEngine,
   type CompactPrice,
   type PriceEngineSettings,
@@ -653,6 +658,7 @@ function toPopupSettings(settings: Awaited<ReturnType<typeof getSettings>>): Pop
     // `!== false` rather than a plain read: a profile stored before this switch
     // existed has no key, and an absent master switch must mean ON.
     enhancementsEnabled: settings.enhancementsEnabled !== false,
+    salesNotifications: settings.salesNotifications !== false,
     followCsboardSettings: settings.followCsboardSettings,
     showCsboardPricesOnCsfloat: settings.showCsboardPricesOnCsfloat,
     showBetterBuffOnBuff: settings.showBetterBuffOnBuff,
@@ -696,6 +702,7 @@ function validateSettingsPatch(
     'currency',
     'priceSource',
     'enhancementsEnabled',
+    'salesNotifications',
     'followCsboardSettings',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',
@@ -717,6 +724,7 @@ function validateSettingsPatch(
   }
   for (const key of [
     'enhancementsEnabled',
+    'salesNotifications',
     'followCsboardSettings',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',
@@ -1709,6 +1717,9 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   wake-up.
 */
 void catchUpP2PTracking(runP2PTrackingPass);
+// Paint the counter now rather than at the first alarm: a badge that appears
+// five minutes after the browser opens looks like it was late, not periodic.
+void runSalesBadgePass();
 
   // Load prices immediately
   refreshAllPrices().catch(err => logger.error('Initial price load failed', { error: String(err) }));
@@ -1727,6 +1738,7 @@ chrome.runtime.onStartup.addListener(async () => {
   logger.info('Extension startup (service worker wake)');
   await runMigrations();
   await registerAlarms();
+  void runSalesBadgePass();
   refreshAllPrices().catch(err => logger.error('Startup price load failed', { error: String(err) }));
   refreshCsboardPrices().catch(err => logger.error('Startup CSBOARD price load failed', { error: String(err) }));
   refreshExchangeRates().catch(err => logger.error('Startup rates load failed', { error: String(err) }));
@@ -2185,6 +2197,10 @@ async function runP2PTrackingPass(): Promise<void> {
       const result = await provider.readTradeOffers();
       return result.offers.map((offer) => ({ offerId: offer.offerId, state: offer.state }));
     });
+
+    // The pass may have just accepted, sent or expired something, so the number
+    // on the icon is stale by the time we get here.
+    await runSalesBadgePass();
   } catch (error) {
     // A browser with no usable Steam session reads nothing and the pass ends
     // quietly: this runs on a timer, and being signed out is not a fault.
@@ -2203,10 +2219,19 @@ async function registerAlarms() {
   // Watch the trades this browser sent — see p2p-trade-tracker.ts for why the
   // seller's own session is the only thing that can see their state.
   registerP2PTrackAlarm();
+  /*
+    The sales counter keeps its own clock: the tracker's drops to hourly exactly
+    when a seller has nothing in flight, which is when a NEW sale is most
+    newsworthy. See p2p-sales-badge.ts.
+  */
+  registerSalesBadgeAlarm(5);
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   switch (alarm.name) {
+    case P2P_SALES_BADGE_ALARM:
+      await runSalesBadgePass();
+      return;
     case P2P_TRACK_ALARM:
       // The pass itself lives in `runP2PTrackingPass` — the same one the
       // wake-up catch-up below calls, so the two cannot drift apart.

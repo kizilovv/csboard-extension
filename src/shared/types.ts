@@ -465,6 +465,14 @@ export interface ExtensionSettings {
     closed is the one job only his browser can do. Those run regardless.
   */
   enhancementsEnabled: boolean;
+  /*
+    Desktop notification when a sale arrives and needs the seller.
+
+    Separate from the master switch above, which is about pages: this one leaves
+    the browser entirely and lands on the operating system, so it gets its own
+    consent rather than riding on a toggle about overlays.
+  */
+  salesNotifications: boolean;
   showPriceOverlays: boolean;
   showFloatValues: boolean;
   notifyNewBoards: boolean;
@@ -485,6 +493,7 @@ export interface ExtensionSettings {
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enhancementsEnabled: true,
+  salesNotifications: true,
   showPriceOverlays: true,
   showFloatValues: true,
   notifyNewBoards: true,
