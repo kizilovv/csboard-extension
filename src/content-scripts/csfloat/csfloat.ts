@@ -837,7 +837,7 @@ function injectComparableCsfloatLookup(card: Element, listing: CSFListing): void
     dopplerPhase: listing.item.phase,
     isStatTrak: listing.item.is_stattrak === true || listing.item.is_stattrak === 1,
     isSouvenir: listing.item.is_souvenir === true || listing.item.is_souvenir === 1,
-  }, { mode: 'comparable', dynamicFloatForKnifeGlove: true });
+  }, { mode: 'comparable', dynamicFloatForGloves: true });
   comparable.target = '_blank';
   comparable.rel = 'noopener noreferrer';
   comparable.textContent = 'Find comparable listings on CSFloat';

@@ -64,21 +64,39 @@ test('does not narrow an ordinary painted weapon even when its exact float is kn
   assert.equal(params.get('max_float'), '0.38');
 });
 
-test('caps knife/glove narrowing at wear boundaries and guards the lower boundary', () => {
+test('caps glove narrowing at wear boundaries and guards the lower boundary', () => {
   const minimalWear = query({
-    marketHashName: '★ M9 Bayonet | Doppler (Minimal Wear)',
-    isKnife: true,
+    marketHashName: '★ Sport Gloves | Slingshot (Minimal Wear)',
+    isGlove: true,
     floatValue: 0.14999,
   });
   assert.equal(minimalWear.get('max_float'), '0.15');
 
   const factoryNewZero = query({
-    marketHashName: '★ Karambit | Fade (Factory New)',
-    isKnife: true,
+    marketHashName: '★ Sport Gloves | Vice (Factory New)',
+    isGlove: true,
     floatValue: 0,
   });
   assert.equal(factoryNewZero.get('min_float'), '0');
   assert.equal(factoryNewZero.get('max_float'), '0.01');
+});
+
+/*
+  Knives lost the narrowing on purpose (owner, 2026-08-27).
+
+  A knife's price moves with its pattern and its wear band, not with the third
+  decimal, so clamping the comparable search to the seller's own float hid most
+  of the market and made "lowest price" a reading off whatever few listings
+  happened to sit below it.
+*/
+test('does not narrow a knife even when its exact float is known', () => {
+  const params = query({
+    marketHashName: '★ M9 Bayonet | Doppler (Minimal Wear)',
+    isKnife: true,
+    floatValue: 0.0801,
+  });
+  assert.equal(params.get('min_float'), '0.07');
+  assert.equal(params.get('max_float'), '0.15');
 });
 
 test('falls back to the full wear range for invalid or contradictory exact floats', () => {

@@ -162,7 +162,10 @@ test('real Buff sell-order shapes produce exact safe actions and never guess a b
   const csfloat = new URL(links.csfloat!);
   assert.equal(csfloat.searchParams.get('category'), '2');
   assert.equal(csfloat.searchParams.get('min_float'), '0');
-  assert.equal(csfloat.searchParams.get('max_float'), '0.03');
+  // The whole Factory New band, not 0.03: this is a KNIFE, and knives are no
+  // longer narrowed to the seller's own float (owner, 2026-08-27). Gloves keep
+  // that narrowing; see test/shared/csfloat-lookup.test.ts.
+  assert.equal(csfloat.searchParams.get('max_float'), '0.07');
 
   const noServerPermission = extractBuffApiModels('sell_order', {
     data: {

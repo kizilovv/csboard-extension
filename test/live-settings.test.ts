@@ -39,7 +39,7 @@ test('CSBOARD quote on CSFloat uses extension currency with explicit provenance'
 
 test('CSFloat item detail lookup is canonical and asset/float keyed', () => {
   assert.match(csfloatSource, /buildCsfloatSearchUrl\(\{/);
-  assert.match(csfloatSource, /dynamicFloatForKnifeGlove: true/);
+  assert.match(csfloatSource, /dynamicFloatForGloves: true/);
   assert.match(csfloatSource, /Find comparable listings on CSFloat/);
   assert.match(csfloatSource, /listing\.item\.asset_id \?\? ''/);
   assert.match(csfloatSource, /Number\.isFinite\(listing\.item\.float_value\)/);

@@ -39,7 +39,7 @@ export interface CsfloatLookupItem {
 
 export interface CsfloatLookupOptions {
   mode?: 'comparable' | 'generic';
-  dynamicFloatForKnifeGlove?: boolean;
+  dynamicFloatForGloves?: boolean;
 }
 
 interface WearRange {
@@ -139,8 +139,8 @@ const withDopplerPhase = (marketHashName: string, dopplerPhase?: string | null):
  *
  * Comparable searches always use the lowest buy-now price. A valid def/paint
  * pair is preferred as identity; otherwise the canonical market name is kept
- * as an explicit, non-exact fallback. Exact float narrowing is deliberately
- * limited to knife/glove assets.
+ * as an explicit, non-exact fallback. Float narrowing beyond the wear band is
+ * deliberately limited to GLOVES — see `canNarrow` for why knives lost it.
  */
 export const buildCsfloatSearchUrl = (
   item: CsfloatLookupItem,
@@ -167,9 +167,17 @@ export const buildCsfloatSearchUrl = (
       const range = WEAR_RANGES[wear];
       let maxFloat = range.max;
       const floatValue = item.floatValue;
+      /*
+        Gloves only. Knives used to be narrowed the same way and it did more
+        harm than good: a knife's price is driven by pattern and by the wear
+        band, not by the third decimal, so clamping the search to your own float
+        hid most of the comparable market and left the "lowest price" reading
+        off a handful of listings. Gloves keep it because their float genuinely
+        moves the price inside a single wear band.
+      */
       const canNarrow =
-        options.dynamicFloatForKnifeGlove !== false &&
-        (classification.isKnife || classification.isGlove) &&
+        options.dynamicFloatForGloves !== false &&
+        classification.isGlove &&
         typeof floatValue === 'number' &&
         Number.isFinite(floatValue) &&
         floatValue >= range.min &&
