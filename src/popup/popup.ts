@@ -420,6 +420,7 @@ function preferenceSyncDescription(): string {
 function renderSettings(): void {
   const currency = element<HTMLSelectElement>('#currency-select');
   const priceSource = element<HTMLSelectElement>('#price-source-select');
+  const enhancements = element<HTMLInputElement>('#enhancements-toggle');
   const follow = element<HTMLInputElement>('#sync-preferences-toggle');
   const showCsfloat = element<HTMLInputElement>('#csfloat-overlay-toggle');
   const showBetterBuff = element<HTMLInputElement>('#betterbuff-toggle');
@@ -427,6 +428,7 @@ function renderSettings(): void {
 
   currency.value = settings.currency;
   priceSource.value = settings.priceSource;
+  enhancements.checked = settings.enhancementsEnabled;
   follow.checked = settings.followCsboardSettings;
   showCsfloat.checked = settings.showCsboardPricesOnCsfloat;
   showBetterBuff.checked = settings.showBetterBuffOnBuff;
@@ -434,11 +436,23 @@ function renderSettings(): void {
   const unavailableOrBusy = !settingsContractAvailable || settingsBusy;
   currency.disabled = unavailableOrBusy || settings.followCsboardSettings;
   priceSource.disabled = unavailableOrBusy || settings.followCsboardSettings;
+  enhancements.disabled = unavailableOrBusy;
   follow.disabled = unavailableOrBusy;
   showCsfloat.disabled = unavailableOrBusy;
   showBetterBuff.disabled = unavailableOrBusy;
   syncButton.disabled = unavailableOrBusy || !settings.followCsboardSettings;
   setText('#preference-sync-status', preferenceSyncDescription());
+  /*
+    Say what stays running. "Off" on a trading extension reads as "does
+    nothing", and a seller who concluded that and stopped watching his sales
+    would be wrong in the one way that costs him a skin.
+  */
+  setText(
+    '#enhancements-status',
+    settings.enhancementsEnabled
+      ? 'Prices, floats and links on Steam, CSFloat and Buff.'
+      : 'Off — nothing is drawn on any site. Sale delivery still works.',
+  );
 }
 
 async function loadSettings(): Promise<void> {
@@ -784,6 +798,18 @@ function bindEvents(): void {
   element<HTMLSelectElement>('#price-source-select').addEventListener('change', (event) => {
     const value = (event.currentTarget as HTMLSelectElement).value;
     if (isSupportedPriceSource(value)) void updateSettings({ priceSource: value });
+  });
+
+  element<HTMLInputElement>('#enhancements-toggle').addEventListener('change', (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void updateSettings(
+      { enhancementsEnabled: enabled },
+      {
+        successMessage: enabled
+          ? 'Enabled. Reload an open tab to see it.'
+          : 'Disabled. Reload an open tab to clear it.',
+      },
+    );
   });
 
   element<HTMLInputElement>('#sync-preferences-toggle').addEventListener('change', (event) => {

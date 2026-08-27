@@ -141,3 +141,34 @@ test('the settings patch validator accepts the master switch', () => {
   assert.match(allowedBlock, /'enhancementsEnabled'/);
   assert.match(workerSource, /enhancementsEnabled: settings\.enhancementsEnabled !== false/);
 });
+
+/*
+  A control the panel draws but nothing reads is worse than no control.
+
+  This shipped once: the markup for the master switch landed, the wiring in
+  popup.ts did not, and the toggle rendered permanently disabled and inert. The
+  build was green, the capability audit passed, and the only way to see it was
+  to open the packaged popup.js and find the id absent. So the id is asserted on
+  BOTH sides here.
+*/
+test('the master switch is wired, not just drawn', () => {
+  const popupHtml = readFileSync(
+    new URL('../src/popup/popup.html', import.meta.url),
+    'utf8',
+  );
+  const popupSource = readFileSync(
+    new URL('../src/popup/popup.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(popupHtml, /id="enhancements-toggle"/);
+  assert.match(popupHtml, /id="enhancements-status"/);
+
+  // Reads the state, enables the control, and persists a change.
+  assert.match(popupSource, /enhancements\.checked = settings\.enhancementsEnabled;/);
+  assert.match(popupSource, /enhancements\.disabled = unavailableOrBusy;/);
+  assert.match(popupSource, /#enhancements-toggle'\)\.addEventListener\('change'/);
+  assert.match(popupSource, /updateSettings\(\s*\{ enhancementsEnabled: enabled \}/);
+  // Names what the switch does NOT stop.
+  assert.match(popupSource, /Sale delivery still works/);
+});
