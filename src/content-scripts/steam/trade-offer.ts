@@ -29,6 +29,7 @@ import {
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('trade-offer');
 
@@ -1787,8 +1788,11 @@ async function init() {
   logger.info('Trade offer page ready');
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init().catch(() => {}); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => init().catch(() => {}));
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init().catch(() => {});
+  whenEnhancementsEnabled(bootstrap);
 }

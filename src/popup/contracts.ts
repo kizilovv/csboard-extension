@@ -51,6 +51,8 @@ export interface PopupSettingsV2 {
   readonly schemaVersion: typeof POPUP_SETTINGS_SCHEMA_VERSION;
   readonly currency: SupportedCurrency;
   readonly priceSource: SupportedPriceSource;
+  /** Master switch for every on-page enhancement. Delivery is unaffected. */
+  readonly enhancementsEnabled: boolean;
   readonly followCsboardSettings: boolean;
   readonly showCsboardPricesOnCsfloat: boolean;
   readonly showBetterBuffOnBuff: boolean;
@@ -78,6 +80,7 @@ export const DEFAULT_POPUP_SETTINGS: PopupSettingsV2 = {
   priceSource: 'buff163',
   // Existing installs currently follow /auth/me. Migration must preserve that
   // behaviour unless the user explicitly turns it off.
+  enhancementsEnabled: true,
   followCsboardSettings: true,
   showCsboardPricesOnCsfloat: true,
   showBetterBuffOnBuff: false,

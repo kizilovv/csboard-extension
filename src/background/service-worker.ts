@@ -650,6 +650,9 @@ function toPopupSettings(settings: Awaited<ReturnType<typeof getSettings>>): Pop
     priceSource: isSupportedPriceSource(settings.priceSource)
       ? settings.priceSource
       : DEFAULT_POPUP_SETTINGS.priceSource,
+    // `!== false` rather than a plain read: a profile stored before this switch
+    // existed has no key, and an absent master switch must mean ON.
+    enhancementsEnabled: settings.enhancementsEnabled !== false,
     followCsboardSettings: settings.followCsboardSettings,
     showCsboardPricesOnCsfloat: settings.showCsboardPricesOnCsfloat,
     showBetterBuffOnBuff: settings.showBetterBuffOnBuff,
@@ -692,6 +695,7 @@ function validateSettingsPatch(
   const allowed = new Set([
     'currency',
     'priceSource',
+    'enhancementsEnabled',
     'followCsboardSettings',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',
@@ -712,6 +716,7 @@ function validateSettingsPatch(
     patch.priceSource = record['priceSource'];
   }
   for (const key of [
+    'enhancementsEnabled',
     'followCsboardSettings',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',

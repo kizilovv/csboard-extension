@@ -15,6 +15,7 @@
 import { priceEngine, CURRENCIES } from '../../shared/price-engine';
 import { buildCsfloatSearchUrl, getBuffLink, getCsboardLink } from '../../shared/items';
 import { createLogger } from '../../shared/logger';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 import {
   buildListingMetadataView,
   type CsfloatListingMetadataText,
@@ -1678,8 +1679,11 @@ function syncDetailCard(): void {
   injectCsboardPanel(card, listing);
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { initUI(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => initUI());
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  initUI();
+  whenEnhancementsEnabled(bootstrap);
 }

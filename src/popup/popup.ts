@@ -151,6 +151,9 @@ function normalizeSettings(value: unknown, fallback: PopupSettingsV2): PopupSett
     priceSource: isSupportedPriceSource(value.priceSource)
       ? value.priceSource
       : fallback.priceSource,
+    enhancementsEnabled: typeof value.enhancementsEnabled === 'boolean'
+      ? value.enhancementsEnabled
+      : fallback.enhancementsEnabled,
     followCsboardSettings: typeof value.followCsboardSettings === 'boolean'
       ? value.followCsboardSettings
       : fallback.followCsboardSettings,

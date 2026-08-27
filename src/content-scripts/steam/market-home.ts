@@ -30,6 +30,7 @@ import {
   type WalletFeeInfo,
 } from '../../shared/steam-fees';
 import { getOrderBook, rateLimitSecondsLeft } from '../../shared/market-orders';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 import {
   authorizeListingRemovalFromUserGesture,
   batchStopReasonForError,
@@ -423,8 +424,11 @@ function init(): void {
   logger.info('Market home ready', { walletFromPage: wallet.fromPage });
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init();
+  whenEnhancementsEnabled(bootstrap);
 }

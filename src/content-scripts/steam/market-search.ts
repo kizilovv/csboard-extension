@@ -16,6 +16,7 @@
 
 import { priceEngine } from '../../shared/price-engine';
 import { createLogger } from '../../shared/logger';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('market-search');
 
@@ -174,8 +175,11 @@ function init() {
   });
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init();
+  whenEnhancementsEnabled(bootstrap);
 }

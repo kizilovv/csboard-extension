@@ -20,6 +20,7 @@ import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { readSteamPageCredential } from '../../shared/steam-page-credential';
 import { sendMessageIfContextAlive } from '../../shared/message-bus';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('trade-offers-list');
 
@@ -830,8 +831,11 @@ function init() {
   });
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init();
+  whenEnhancementsEnabled(bootstrap);
 }

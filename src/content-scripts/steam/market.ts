@@ -19,6 +19,7 @@ import { getCsboardLink } from '../../shared/items';
 import { MarketHashName, type PriceData } from '../../shared/types';
 import { getWalletFeeInfo, formatWalletAmount, receivedForBuyerPays } from '../../shared/steam-fees';
 import { getOrderBook, primeItemNameId, type OrderBook } from '../../shared/market-orders';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('market');
 
@@ -313,8 +314,11 @@ function init() {
   });
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init();
+  whenEnhancementsEnabled(bootstrap);
 }

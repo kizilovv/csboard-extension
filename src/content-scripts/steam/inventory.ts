@@ -25,6 +25,7 @@ import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { setupSellUi, injectSellPanel, repaintSellSelection } from './sell-ui';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
+import { whenEnhancementsEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('inventory');
 
@@ -1411,8 +1412,11 @@ async function init() {
   logger.info('Inventory page ready');
 }
 
+/* The master switch is checked here, once, before anything is drawn. */
+const bootstrap = () => { init().catch((e) => logger.error('Init failed', { error: String(e) })); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => init().catch((e) => logger.error('Init failed', { error: String(e) })));
+  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
 } else {
-  init().catch((e) => logger.error('Init failed', { error: String(e) }));
+  whenEnhancementsEnabled(bootstrap);
 }

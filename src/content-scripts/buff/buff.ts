@@ -190,7 +190,15 @@ async function reloadLocalState(): Promise<void> {
       csboardPrices: numberMap(values[CSBOARD_PRICES_KEY]),
     };
 
-    if (settings.showBetterBuffOnBuff === true) enableEnhancements();
+    /*
+      The master switch outranks the per-site opt-in, and is re-read here rather
+      than at boot: this function already re-runs on every settings change, so
+      flipping the switch takes the overlay down (and puts it back) without a
+      reload — which is what a user who just turned the extension off expects to
+      see on the page he is looking at.
+    */
+    const enhancementsOn = settings.enhancementsEnabled !== false;
+    if (enhancementsOn && settings.showBetterBuffOnBuff === true) enableEnhancements();
     else disableEnhancements();
   } catch {
     if (generation === stateGeneration) disableEnhancements();

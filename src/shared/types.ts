@@ -451,6 +451,20 @@ export interface PortfolioSyncStatus {
 }
 
 export interface ExtensionSettings {
+  /*
+    The master switch for everything this extension DRAWS.
+
+    Off means no content script touches a page: no overlays, no float badges,
+    no comparison links, on Steam, CSFloat or Buff alike. The per-site toggles
+    below stay as they are and take effect again the moment it is switched back
+    on — this is a mute, not a reset.
+
+    It deliberately does NOT stop P2P delivery. A seller who wanted the page
+    decorations gone would otherwise silently stop delivering the sales he has
+    already accepted, and cancelling a Steam offer for an order csboard has
+    closed is the one job only his browser can do. Those run regardless.
+  */
+  enhancementsEnabled: boolean;
   showPriceOverlays: boolean;
   showFloatValues: boolean;
   notifyNewBoards: boolean;
@@ -470,6 +484,7 @@ export interface ExtensionSettings {
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
+  enhancementsEnabled: true,
   showPriceOverlays: true,
   showFloatValues: true,
   notifyNewBoards: true,

@@ -20,6 +20,29 @@
     </header>
 
     <main>
+      <!--
+        The master switch, first thing in the panel.
+
+        It was missing entirely: the popup offered currency, price source and a
+        per-site overlay toggle, but no way to say "stop drawing on my pages".
+        The supporting line names the one thing it does NOT stop, because a
+        seller who reads "off" and then loses a sale to an undelivered trade has
+        been misled by this control.
+      -->
+      <section class="card" aria-labelledby="master-heading">
+        <h1 id="master-heading" class="card-title">Extension</h1>
+        <label class="setting-row">
+          <span>
+            <span class="setting-title">Show csboard on trading sites</span>
+            <span id="enhancements-status" class="setting-description">Loading…</span>
+          </span>
+          <span class="switch">
+            <input id="enhancements-toggle" type="checkbox" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </span>
+        </label>
+      </section>
+
       <section class="card auth-card" aria-labelledby="account-heading">
         <div class="section-heading-row">
           <div>

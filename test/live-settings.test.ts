@@ -83,3 +83,61 @@ test('inventory settings repaint keeps the merged context 2 + 16 asset view', ()
   assert.match(mergeSource, /seen\.has\(identity\)/);
   assert.match(mergeSource, /seen\.add\(identity\)/);
 });
+
+/*
+  The master off switch, and the one thing it must never reach.
+
+  Turning the extension "off" is about what it DRAWS. A seller who mutes the
+  overlays and thereby stops delivering sales he already accepted — or stops
+  cancelling a Steam offer for an order csboard has closed, which is the one job
+  only his browser can do — has been broken by a settings toggle. These
+  assertions are the guard on that boundary.
+*/
+test('every drawing content script is gated on the master switch, delivery is not', () => {
+  const gated = [
+    'steam/inventory', 'steam/market-home', 'steam/market', 'steam/market-search',
+    'steam/profile', 'steam/trade-history', 'steam/trade-offers', 'steam/trade-offer',
+    'csfloat/csfloat',
+  ];
+  for (const name of gated) {
+    const source = readFileSync(
+      new URL(`../src/content-scripts/${name}.ts`, import.meta.url),
+      'utf8',
+    );
+    assert.match(source, /whenEnhancementsEnabled\(bootstrap\)/, `${name} must be gated`);
+  }
+
+  // Buff reads it live, so the overlay clears without a reload.
+  const buffSource = readFileSync(
+    new URL('../src/content-scripts/buff/buff.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(buffSource, /settings\.enhancementsEnabled !== false/);
+
+  for (const name of ['steam/p2p-send', 'steam/page-credential-bridge']) {
+    const source = readFileSync(
+      new URL(`../src/content-scripts/${name}.ts`, import.meta.url),
+      'utf8',
+    );
+    assert.doesNotMatch(
+      source,
+      /whenEnhancementsEnabled/,
+      `${name} must keep running while enhancements are off`,
+    );
+  }
+});
+
+test('the settings patch validator accepts the master switch', () => {
+  const workerSource = readFileSync(
+    new URL('../src/background/service-worker.ts', import.meta.url),
+    'utf8',
+  );
+  // The allow-list rejects unknown keys outright, so a toggle missing from it
+  // does not degrade — it throws INVALID_SETTINGS_PATCH at the user.
+  const allowedBlock = workerSource.slice(
+    workerSource.indexOf('const allowed = new Set(['),
+    workerSource.indexOf('const patch: Partial<'),
+  );
+  assert.match(allowedBlock, /'enhancementsEnabled'/);
+  assert.match(workerSource, /enhancementsEnabled: settings\.enhancementsEnabled !== false/);
+});
