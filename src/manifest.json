@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CSBoard - Tool For CS2 Trading",
-  "version": "1.1.8",
+  "version": "1.1.11",
   "description": "CS2 price comparison, user-confirmed Steam Market tools, and opt-in encrypted portfolio sync.",
   "homepage_url": "https://csboard.com",
   "icons": {
@@ -52,6 +52,15 @@
         "src/content-scripts/steam/page-credential-bridge.ts"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://steamcommunity.com/tradeoffer/*"
+      ],
+      "js": [
+        "src/content-scripts/steam/p2p-send.ts"
+      ],
+      "run_at": "document_end"
     },
     {
       "matches": [

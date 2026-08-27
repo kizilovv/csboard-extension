@@ -6,6 +6,14 @@
 // Uses typed message router — zero `any`, zero `switch`.
 
 import { getApiBase, SITE_BASE } from '../shared/config';
+import { sendP2PTradeForOrder } from './p2p-trade-send';
+import {
+  catchUpP2PTracking,
+  P2P_TRACK_ALARM,
+  registerP2PTrackAlarm,
+  trackP2PTrades,
+} from './p2p-trade-tracker';
+import { runP2PCancellations } from './p2p-trade-cancel';
 import {
   priceEngine,
   type CompactPrice,
@@ -1513,6 +1521,10 @@ registerExternalStatusRouter({
   syncHandlers: {
     requestManualSync: requestExternalManualSync,
     readSyncStatus: readExternalSyncStatus,
+    // Delivery for one paid order. Takes an order id from the page and looks up
+    // everything else against csboard's own record of that order — see
+    // p2p-trade-send.ts for why the page is not trusted with the item.
+    sendTradeForOrder: (orderId: string) => sendP2PTradeForOrder(orderId),
   },
   handlers: {
     async isPaired() {
@@ -1680,6 +1692,18 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
   // Register alarms
   await registerAlarms();
+
+/*
+  Catch up the moment this worker wakes, not only when the alarm fires.
+
+  Chrome's scheduling assumes the browser stays open, and sellers do not keep it
+  open: someone lifts the laptop lid, sends a trade and shuts it again inside a
+  minute, and the periodic alarm never fires at all — so the offer just sent is
+  never reported and the sale hangs. Rate-limited inside `catchUpP2PTracking`,
+  so a worker that wakes on every message does not turn this into a request per
+  wake-up.
+*/
+void catchUpP2PTracking(runP2PTrackingPass);
 
   // Load prices immediately
   refreshAllPrices().catch(err => logger.error('Initial price load failed', { error: String(err) }));
@@ -2100,6 +2124,69 @@ async function performAutomaticPortfolioSync(epoch: number): Promise<void> {
   }
 }
 
+/*
+  One tracking pass: report offer states, then completed trades.
+
+  Named rather than inlined into the alarm because two callers need it — the
+  three-minute alarm, and the catch-up that runs when the service worker wakes.
+  A seller who opens the laptop, sends a trade and closes it again never gets a
+  full alarm interval, and that is a common enough shape that csfloat's
+  extension carries the same catch-up.
+*/
+async function runP2PTrackingPass(): Promise<void> {
+  try {
+    const provider = await getSteamReadProvider();
+    await trackP2PTrades(
+      async () => {
+        const result = await provider.readTradeOffers();
+        return result.offers.map((offer) => ({
+          offerId: offer.offerId,
+          state: offer.state,
+          ...(offer.escrowEndAt !== undefined ? { escrowEndAt: offer.escrowEndAt } : {}),
+        }));
+      },
+      /*
+        The completed-trade half. 200 rows covers a seven-day hold comfortably
+        even for a busy trader, and seven days is the window that matters: that
+        is how long the buyer's skin sits in Steam's hold, and how long the
+        seller can still reverse the trade out of it.
+      */
+      async () => {
+        const result = await provider.readRecentTrades(200);
+        return result.trades.map((trade) => ({
+          tradeId: trade.tradeId,
+          status: result.statuses[trade.tradeId] ?? 0,
+          givenAssetIds: trade.itemsGiven.map((item) => item.assetId),
+          receivedAssetIds: trade.itemsReceived.map((item) => item.assetId),
+          partnerSteamId: trade.partnerSteamId,
+          occurredAt: trade.occurredAt,
+        }));
+      },
+    );
+
+    /*
+      Then close the offers csboard has finished with.
+
+      After the reporting, not before: the pass above is what tells the backend
+      an offer went Active or Accepted, and an offer that just landed in the
+      buyer's hands must not be queued for cancellation on stale information.
+
+      This is the half that keeps a cancelled sale from completing anyway. An
+      order can end on the site — send window missed, buyer refunded — with its
+      Steam offer still sitting in the seller's outbox, and one tap there sends
+      the skin for a sale that no longer exists. Only this browser can close it.
+    */
+    await runP2PCancellations(async () => {
+      const result = await provider.readTradeOffers();
+      return result.offers.map((offer) => ({ offerId: offer.offerId, state: offer.state }));
+    });
+  } catch (error) {
+    // A browser with no usable Steam session reads nothing and the pass ends
+    // quietly: this runs on a timer, and being signed out is not a fault.
+    logger.warn('P2P trade tracking pass failed', { error: String(error) });
+  }
+}
+
 async function registerAlarms() {
   chrome.alarms.create(PORTFOLIO_AUTO_SYNC_ALARM, {
     periodInMinutes: PORTFOLIO_AUTO_SYNC_MINUTES,
@@ -2108,10 +2195,18 @@ async function registerAlarms() {
   chrome.alarms.create('refresh-prices', { periodInMinutes: 5 });
   chrome.alarms.create('refresh-csboard-prices', { periodInMinutes: 10 });
   chrome.alarms.create('refresh-exchange-rates', { periodInMinutes: 60 });
+  // Watch the trades this browser sent — see p2p-trade-tracker.ts for why the
+  // seller's own session is the only thing that can see their state.
+  registerP2PTrackAlarm();
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   switch (alarm.name) {
+    case P2P_TRACK_ALARM:
+      // The pass itself lives in `runP2PTrackingPass` — the same one the
+      // wake-up catch-up below calls, so the two cannot drift apart.
+      await runP2PTrackingPass();
+      return;
     case 'refresh-prices':
       await refreshAllPrices();
       return;

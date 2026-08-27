@@ -44,6 +44,19 @@ export interface SteamTradesReadResult {
   readonly icons: Readonly<Record<string, string>>;
   /** Steam rarity colour per `classId:instanceId`, same reasoning as icons. */
   readonly nameColors: Readonly<Record<string, string>>;
+  /*
+    Steam's `ETradeStatus` per tradeId, kept OUTSIDE the DTO for the same reason
+    as the icons above: the gateway validates that shape strictly and an extra
+    field turns into a rejected sync.
+
+    It is here because a completed trade and a ROLLED-BACK trade are the same
+    row with a different status. After the buyer accepts, the skin sits in
+    Steam's 7-day hold and the seller can still reverse it — and nothing outside
+    the seller's own session can see that happen. Reading the trade but dropping
+    its status would mean watching the one event we most need to catch and
+    recording it as success.
+  */
+  readonly statuses: Readonly<Record<string, number>>;
 }
 
 export interface SteamTradeHistoryCursor {
@@ -748,6 +761,14 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     });
     const icons: Record<string, string> = {};
     const nameColors: Record<string, string> = {};
+    // Status per trade, by the same id the DTO carries — see `statuses`.
+    const statuses: Record<string, number> = {};
+    for (const [index, entry] of asArray(response['trades']).entries()) {
+      const trade = asRecord(entry, `$.trades[${index}]`);
+      const tradeId = optionalString(trade['tradeid'], 32);
+      const status = optionalInteger(trade['status']);
+      if (tradeId && status !== undefined) statuses[tradeId] = status;
+    }
     for (const [key, description] of descriptions) {
       const iconUrl = normalizeIconUrl(description['icon_url']);
       // Steam's economy CDN resizes on request. Without a size suffix it serves
@@ -769,6 +790,7 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       trades: trades.slice(0, maxTrades),
       icons,
       nameColors,
+      statuses,
       hasMore,
       ...(totalTrades !== undefined ? { totalTrades } : {}),
     };

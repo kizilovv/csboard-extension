@@ -29,11 +29,24 @@ test('service worker pins CSFolder activation and enables exactly two visible so
   assert.doesNotMatch(registration, /UNPAIR_DEVICE|steamLoginSecure|sessionid/);
 });
 
-test('CSBOARD gets exactly two sync commands, on its own origin list', () => {
+test('CSBOARD gets exactly three sync commands, on its own origin list', () => {
   // 1.1.5 said "CSBOARD retains a read-only status probe and nothing else".
   // 1.1.6 moved that line by exactly two commands so the site can ask for the
   // fresh inventory snapshot a listing needs. This test is the record of how
-  // far it moved: a third command, or a third origin, must fail here first.
+  // far it moved: a further command, or a further origin, must fail here first.
+  //
+  // 2026-08-27 moved it once more, by one: `sendTradeForOrder`, so the site can
+  // ask us to DELIVER a sold item. It is the narrowest command in the file —
+  // the page names an order id and nothing else, and everything that decides
+  // what leaves the seller's inventory is read from csboard's own record of
+  // that order. It exists because the alternative was a manual link into
+  // Steam's trade window, where a seller picks the items himself and can send a
+  // different skin than the one that was bought.
+  //
+  // Still NOT here, and each absence is deliberate: no pairing, no credential
+  // read, no way to get Steam data back out to the page. CSFolder's origins are
+  // not on this list either — it has no orders and no business delivering
+  // anybody's skins.
   const registration = /registerExternalStatusRouter\(\{([\s\S]*?)\n\}\);/
     .exec(worker)?.[1];
   assert.ok(registration, 'external router registration not found');
@@ -45,10 +58,11 @@ test('CSBOARD gets exactly two sync commands, on its own origin list', () => {
   assert.ok(syncHandlers, 'sync handlers not wired');
   assert.match(syncHandlers, /requestManualSync:\s*requestExternalManualSync/);
   assert.match(syncHandlers, /readSyncStatus:\s*readExternalSyncStatus/);
+  assert.match(syncHandlers, /sendTradeForOrder:/);
   assert.equal(
     syncHandlers.split('\n').filter((line) => /^\s*\w+:/.test(line)).length,
-    2,
-    'the site may trigger a sync and read its state — nothing else',
+    3,
+    'the site may trigger a sync, read its state, and deliver a paid order — nothing else',
   );
 
   // 1.1.7 moved the line again, and only in one place: an install that is not

@@ -25,6 +25,18 @@ export const EXTERNAL_REACTIVATE_MESSAGE_TYPE =
  * into the other listener.
  */
 export const EXTERNAL_RUN_SYNC_MESSAGE_TYPE = 'RUN_MANUAL_SYNC' as const;
+
+/*
+  Deliver the item for one paid order.
+
+  The narrowest command in this file: the page names an ORDER and nothing else.
+  What leaves the seller's inventory — which asset, to whom, under which number —
+  is fetched by the background from csboard's own API against the order the buyer
+  paid for, so a scripted page has nothing to substitute. That is the whole
+  reason delivery moved into the extension: Steam's own trade window lets a
+  seller pick a different skin, and this path never consults it.
+*/
+export const EXTERNAL_SEND_TRADE_MESSAGE_TYPE = 'P2P_SEND_TRADE' as const;
 export const EXTERNAL_SYNC_STATUS_MESSAGE_TYPE =
   'GET_PORTFOLIO_SYNC_STATUS' as const;
 const EXTERNAL_PROTOCOL_VERSION = 1 as const;
@@ -88,6 +100,34 @@ export type ExternalStatusResponse =
         readonly installed: true;
         readonly extensionVersion: string;
         readonly capabilityVersion: 1;
+      };
+    }
+  /*
+    A delivery attempt for one paid order.
+
+    Two shapes, both `ok: true`, because the ENVELOPE succeeded either way — the
+    extension was reached and it did the work. Whether Steam accepted the offer
+    is the payload's business, and the site needs the difference between "signed
+    out of Steam" and "buyer cannot receive items" to say anything useful, which
+    the router's small error vocabulary cannot carry.
+  */
+  | {
+      readonly version: 1;
+      readonly requestId: string;
+      readonly ok: true;
+      readonly data: {
+        readonly steamTradeOfferId: string;
+        readonly needsMobileConfirmation: boolean;
+      };
+    }
+  | {
+      readonly version: 1;
+      readonly requestId: string;
+      readonly ok: true;
+      readonly data: {
+        readonly sendFailed: true;
+        readonly code: string;
+        readonly detail: string | null;
       };
     }
   | {
@@ -206,7 +246,21 @@ export interface ExternalSyncHandlers {
   requestManualSync(): Promise<ExternalManualSyncResult>;
   /** Whether this browser is paired, and what the last/current run is doing. */
   readSyncStatus(): Promise<ExternalSyncStatusSnapshot>;
+  /**
+   * Deliver the item for one paid order, and report the offer back to csboard.
+   *
+   * Takes an order id and nothing else — see EXTERNAL_SEND_TRADE_MESSAGE_TYPE.
+   * Resolves with the Steam offer id, or a code naming what the seller has to
+   * fix. Slower than the other two by nature: it opens a tab and waits for
+   * Steam.
+   */
+  sendTradeForOrder(orderId: string): Promise<ExternalSendTradeResult>;
 }
+
+/** What the delivery attempt tells the page. */
+export type ExternalSendTradeResult =
+  | { readonly ok: true; readonly steamTradeOfferId: string; readonly needsMobileConfirmation: boolean }
+  | { readonly ok: false; readonly code: string; readonly detail?: string };
 
 export interface ExternalPairAndEnableHandlers {
   /** Local gateway registration is the only accepted proof of pairing. */
@@ -395,6 +449,11 @@ function allowedOriginsForExternalType(
       return options.pairingAllowedOrigins;
     case EXTERNAL_RUN_SYNC_MESSAGE_TYPE:
     case EXTERNAL_SYNC_STATUS_MESSAGE_TYPE:
+    // Delivery rides the same allowlist as sync, and for the same reason: both
+    // are csboard asking us to act on the seller's own order. It is NOT opened
+    // to the pairing origins — CSFolder has no orders and no business sending
+    // anybody's skins.
+    case EXTERNAL_SEND_TRADE_MESSAGE_TYPE:
       return options.syncAllowedOrigins;
     default:
       // An unknown type from any origin we speak to at all is INVALID_MESSAGE,
@@ -503,6 +562,66 @@ export async function dispatchExternalMessage(
       requestId,
       isExternalSyncRefusalCode(outcome?.refused) ? outcome.refused : 'SYNC_TRIGGER_FAILED',
     );
+  }
+
+  if (type === EXTERNAL_SEND_TRADE_MESSAGE_TYPE) {
+    /*
+      One field, checked exactly. The message must be
+      {version, type, requestId, payload:{orderId}} and nothing else — an extra
+      key is a page trying to smuggle in an asset or a recipient, and the answer
+      to that is refusal, not best-effort parsing.
+    */
+    const payload = (message as { payload?: unknown } | null)?.payload;
+    const orderId = (payload as { orderId?: unknown } | null)?.orderId;
+    const payloadKeys = payload && typeof payload === 'object' ? Object.keys(payload) : [];
+    /*
+      One order, one field, checked exactly.
+
+      A seller clearing several sales calls this once per sale — the site does
+      the loop. That was a deliberate reversal: a batch command inside the
+      extension meant a new store build for something the page can already do
+      with the handshake it has, and every extra shape here is more surface a
+      page could push on.
+    */
+    if (requestId === null ||
+        typeof orderId !== 'string' ||
+        orderId.length === 0 ||
+        orderId.length > 64 ||
+        payloadKeys.length !== 1) {
+      return externalError(requestId, 'INVALID_MESSAGE');
+    }
+
+    let outcome: ExternalSendTradeResult;
+    try {
+      outcome = await options.syncHandlers.sendTradeForOrder(orderId);
+    } catch {
+      return externalError(requestId, 'SYNC_TRIGGER_FAILED');
+    }
+    if (outcome.ok) {
+      return {
+        version: 1,
+        requestId,
+        ok: true,
+        data: {
+          steamTradeOfferId: outcome.steamTradeOfferId,
+          needsMobileConfirmation: outcome.needsMobileConfirmation === true,
+        },
+      };
+    }
+    /*
+      The failure reaches the page as data, not as an error envelope.
+
+      Each code is a different thing for the seller to do — signed out of Steam,
+      item gone, buyer cannot receive — and the site phrases them. Squeezing
+      them through the router's small error vocabulary would flatten all of them
+      into one useless sentence.
+    */
+    return {
+      version: 1,
+      requestId,
+      ok: true,
+      data: { sendFailed: true, code: outcome.code, detail: outcome.detail ?? null },
+    };
   }
 
   if (type === EXTERNAL_SYNC_STATUS_MESSAGE_TYPE) {
