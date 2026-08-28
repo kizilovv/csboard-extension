@@ -2208,7 +2208,13 @@ async function runP2PTrackingPass(): Promise<void> {
         still reverse the trade out of it.
       */
       async () => {
-        const result = await provider.readRecentTrades(100);
+        /*
+          Tolerant rows: this parser is strict by default and throws the whole
+          page away over one malformed trade. Portfolio sync wants that; this
+          caller does not — it is hunting one trade among a hundred, and a bad
+          neighbour taking the read down means a Steam rollback goes unseen.
+        */
+        const result = await provider.readRecentTrades(100, { skipUnreadableRows: true });
         return result.trades.map((trade) => ({
           tradeId: trade.tradeId,
           status: result.statuses[trade.tradeId] ?? 0,

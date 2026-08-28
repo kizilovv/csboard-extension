@@ -104,6 +104,24 @@ function backoffMs(attempt: number): number {
 */
 const OFFER_DEAD_STATES = new Set([1, 4, 5, 6, 7, 8, 10]);
 
+/*
+  Is this offer past the point where the buyer could still take the item?
+
+  Absent from a successful read counts as YES, and that is the deliberate part.
+  Steam's sent-offer list is the seller's own complete list; an offer we just
+  cancelled and can no longer find in it has not become invisible while staying
+  live. csfloat's extension makes the same judgement in the same direction —
+  `state === Active` blocks their cancel ping, and anything else, including not
+  found, lets it through.
+
+  Treating absence as "unknown" instead was what left two live orders with a
+  dead offer in Steam and an open queue entry on the server: they were cancelled
+  correctly, and then nothing would ever say so.
+*/
+function offerIsSettled(state: number | undefined): boolean {
+  return state === undefined || OFFER_DEAD_STATES.has(state);
+}
+
 interface PendingCancellation {
   orderId: string;
   steamTradeOfferId: string;
@@ -284,7 +302,7 @@ export async function runP2PCancellations(
   const work: PendingCancellation[] = [];
   for (const item of queue) {
     const state = before.get(item.steamTradeOfferId);
-    if (state !== undefined && OFFER_DEAD_STATES.has(state)) {
+    if (offerIsSettled(state)) {
       alreadyDead.push(item);
       continue;
     }
@@ -365,7 +383,7 @@ export async function runP2PCancellations(
 
   for (const item of batch) {
     const state = after.get(item.steamTradeOfferId);
-    if (state !== undefined && OFFER_DEAD_STATES.has(state)) {
+    if (offerIsSettled(state)) {
       await confirmCancelled(item);
       delete attempts[item.orderId];
       tally.confirmed += 1;

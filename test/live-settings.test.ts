@@ -254,7 +254,9 @@ test('the P2P pass uses the unfiltered offer reader and a legal history size', (
     (pass.match(/readTradeOffersForDisplay\(\{ received: false \}\)/g) ?? []).length,
     2,
   );
-  assert.match(pass, /provider\.readRecentTrades\(100\)/);
+  // 100 because the provider rejects more before it makes a request, and
+  // tolerant rows because one malformed trade must not take the page down.
+  assert.match(pass, /provider\.readRecentTrades\(100, \{ skipUnreadableRows: true \}\)/);
 
   const providerSource = readFileSync(
     new URL('../src/background/steam-read-session-provider.ts', import.meta.url),
@@ -264,4 +266,16 @@ test('the P2P pass uses the unfiltered offer reader and a legal history size', (
   // the wrong one. If either moves, this test is the reminder.
   assert.match(providerSource, /maxTrades > 100/);
   assert.match(providerSource, /if \(state !== 3\) return \[\];/);
+
+  /*
+    An offer missing from a successful sent-offer read counts as settled. That
+    is the judgement that lets a cancellation ever be confirmed, and reverting
+    it to "unknown" silently strands orders, so it is asserted rather than left
+    to a comment.
+  */
+  const cancelSource = readFileSync(
+    new URL('../src/background/p2p-trade-cancel.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(cancelSource, /return state === undefined \|\| OFFER_DEAD_STATES\.has\(state\);/);
 });

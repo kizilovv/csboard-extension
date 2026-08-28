@@ -67,6 +67,16 @@ export interface SteamTradeHistoryCursor {
 export interface SteamTradesReadOptions {
   readonly cursor?: SteamTradeHistoryCursor;
   readonly includeTotal?: boolean;
+  /*
+    Skip a row this parser cannot read instead of failing the whole page.
+
+    Off by default, because portfolio sync is a record of item movement and a
+    half-parsed sync is worse than no sync. The P2P tracker wants the opposite:
+    it is looking for ONE trade among a hundred, and one malformed neighbour
+    taking the read down means a Steam rollback goes unseen — and a rollback
+    moves the items back and never the money.
+  */
+  readonly skipUnreadableRows?: boolean;
 }
 
 export interface SteamOffersReadResult {
@@ -699,6 +709,44 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     throw new GatewayPayloadError('INVALID_PAYLOAD', { reason: 'inventory-pagination-limit' });
   }
 
+  /** One history row, strictly. Callers decide whether a bad row is fatal. */
+  private readTradeRowStrict(
+    entry: unknown,
+    index: number,
+    descriptions: ReturnType<typeof buildDescriptionMap>,
+  ): PortfolioTradeDto {
+    const trade = asRecord(entry, `$.trades[${index}]`);
+    const partnerSteamId = requiredDigits(
+      trade['steamid_other'],
+      `$.trades[${index}].steamid_other`,
+      20,
+    );
+    assertSteamId64(partnerSteamId);
+    const occurredAt = optionalInteger(trade['time_init']);
+    if (!occurredAt || occurredAt <= 0) {
+      throw new GatewayPayloadError('INVALID_PAYLOAD', {
+        path: `$.trades[${index}].time_init`,
+      });
+    }
+    return {
+      tradeId: requiredDigits(trade['tradeid'], `$.trades[${index}].tradeid`),
+      partnerSteamId,
+      occurredAt,
+      itemsGiven: normalizeTradeItems(
+        trade['assets_given'],
+        descriptions,
+        `$.trades[${index}].assets_given`,
+        'given',
+      ),
+      itemsReceived: normalizeTradeItems(
+        trade['assets_received'],
+        descriptions,
+        `$.trades[${index}].assets_received`,
+        'received',
+      ),
+    };
+  }
+
   async readRecentTrades(
     maxTrades = 100,
     options: SteamTradesReadOptions = {},
@@ -727,37 +775,14 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       } : {}),
     });
     const descriptions = buildDescriptionMap(asArray(response['descriptions']));
-    const trades = asArray(response['trades']).map((entry, index): PortfolioTradeDto => {
-      const trade = asRecord(entry, `$.trades[${index}]`);
-      const partnerSteamId = requiredDigits(
-        trade['steamid_other'],
-        `$.trades[${index}].steamid_other`,
-        20,
-      );
-      assertSteamId64(partnerSteamId);
-      const occurredAt = optionalInteger(trade['time_init']);
-      if (!occurredAt || occurredAt <= 0) {
-        throw new GatewayPayloadError('INVALID_PAYLOAD', {
-          path: `$.trades[${index}].time_init`,
-        });
+    const skipUnreadable = options.skipUnreadableRows === true;
+    const trades = asArray(response['trades']).flatMap((entry, index): PortfolioTradeDto[] => {
+      try {
+        return [this.readTradeRowStrict(entry, index, descriptions)];
+      } catch (error) {
+        if (!skipUnreadable) throw error;
+        return [];
       }
-      return {
-        tradeId: requiredDigits(trade['tradeid'], `$.trades[${index}].tradeid`),
-        partnerSteamId,
-        occurredAt,
-        itemsGiven: normalizeTradeItems(
-          trade['assets_given'],
-          descriptions,
-          `$.trades[${index}].assets_given`,
-          'given',
-        ),
-        itemsReceived: normalizeTradeItems(
-          trade['assets_received'],
-          descriptions,
-          `$.trades[${index}].assets_received`,
-          'received',
-        ),
-      };
     });
     const icons: Record<string, string> = {};
     const nameColors: Record<string, string> = {};
