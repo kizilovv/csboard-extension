@@ -2,6 +2,14 @@
 
 ## 1.1.14
 
+- Fixed the reason no cancellation was ever confirmed and no trade history was
+  ever reported. The P2P pass was reading offers through the PORTFOLIO reader,
+  which drops every offer that is not accepted — so pending, cancelled and
+  declined offers were invisible to it, and an offer could never be seen to
+  die. It now reads the display reader, which returns every offer with its real
+  state. Separately, the completed-trade half asked for 200 rows against a
+  hard limit of 100 and threw before making a request, every pass since it was
+  written, leaving reversal detection blind.
 - The cancellation of Steam offers for sales csboard has already closed no
   longer sits downstream of the trade-reporting half in the same try block. Any
   fault in reporting — a Steam history read timing out, say — used to skip

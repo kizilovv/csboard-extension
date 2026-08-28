@@ -2173,22 +2173,42 @@ async function runP2PTrackingPass(): Promise<void> {
   */
   try {
     await trackP2PTrades(
+      /*
+        `readTradeOffersForDisplay`, NOT `readTradeOffers`.
+
+        The latter is the portfolio reader, and it drops every offer that is not
+        ACCEPTED — `if (state !== 3) return []` — because portfolio sync is a
+        record of item movement. Feeding it to a tracker whose whole job is to
+        watch offers BEFORE they are accepted meant every pending, cancelled and
+        declined offer was invisible: the tracker skipped them with "an offer we
+        cannot see is NOT reported", and the cancellation pass below could never
+        see one turn dead, so it never confirmed a single cancellation.
+
+        The display reader returns every offer with its real state, including
+        the settled ones, which is exactly what both callers need. Received
+        offers are excluded: a seller's delivery is always an offer he sent.
+      */
       async () => {
-        const result = await provider.readTradeOffers();
+        const result = await provider.readTradeOffersForDisplay({ received: false });
         return result.offers.map((offer) => ({
-          offerId: offer.offerId,
-          state: offer.state,
-          ...(offer.escrowEndAt !== undefined ? { escrowEndAt: offer.escrowEndAt } : {}),
+          offerId: offer.tradeofferid,
+          state: offer.trade_offer_state,
+          ...(offer.escrow_end_date !== undefined ? { escrowEndAt: offer.escrow_end_date } : {}),
         }));
       },
       /*
-        The completed-trade half. 200 rows covers a seven-day hold comfortably
-        even for a busy trader, and seven days is the window that matters: that
-        is how long the buyer's skin sits in Steam's hold, and how long the
-        seller can still reverse the trade out of it.
+        The completed-trade half, capped at the 100 rows the provider accepts.
+
+        It asked for 200. `readRecentTrades` rejects anything over 100 with
+        INVALID_PAYLOAD before it makes a single request, so this half threw on
+        EVERY pass and had never once run — which is why no trade history was
+        ever reported, and why the reversal detection that rides on it has been
+        blind. A hundred rows still covers the seven days that matter: how long
+        the buyer's skin sits in Steam's hold, and how long the seller can
+        still reverse the trade out of it.
       */
       async () => {
-        const result = await provider.readRecentTrades(200);
+        const result = await provider.readRecentTrades(100);
         return result.trades.map((trade) => ({
           tradeId: trade.tradeId,
           status: result.statuses[trade.tradeId] ?? 0,
@@ -2218,8 +2238,13 @@ async function runP2PTrackingPass(): Promise<void> {
 
   try {
     await runP2PCancellations(async () => {
-      const result = await provider.readTradeOffers();
-      return result.offers.map((offer) => ({ offerId: offer.offerId, state: offer.state }));
+      // Same reader, same reason: a cancelled offer is state 6, and the
+      // portfolio reader would have thrown it away before we could see it die.
+      const result = await provider.readTradeOffersForDisplay({ received: false });
+      return result.offers.map((offer) => ({
+        offerId: offer.tradeofferid,
+        state: offer.trade_offer_state,
+      }));
     });
   } catch (error) {
     logger.warn('P2P cancellation pass failed', { error: String(error) });

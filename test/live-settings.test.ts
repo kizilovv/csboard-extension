@@ -222,3 +222,46 @@ test('the sales badge counts the delivery queue on its own clock', () => {
   // Painted on wake too, not only on the first alarm.
   assert.match(workerSource, /await registerAlarms\(\);\n  void runSalesBadgePass\(\);/);
 });
+
+/*
+  The two readers are not interchangeable, and picking the wrong one is silent.
+
+  `readTradeOffers` is the PORTFOLIO reader: it drops every offer that is not
+  accepted (`if (state !== 3) return []`), because portfolio sync records item
+  movement. The P2P tracker and the cancellation pass watch offers precisely
+  BEFORE they are accepted, and while they die — so on that reader every
+  pending, cancelled and declined offer simply did not exist. The tracker
+  skipped them, the cancellation pass never saw one turn dead, and not one
+  cancellation was ever confirmed. Nothing errored; it just never happened.
+
+  And `readRecentTrades` rejects anything over 100 rows before it makes a
+  request, so asking for 200 threw INVALID_PAYLOAD on every single pass and the
+  completed-trade half — the one reversal detection rides on — had never run.
+*/
+test('the P2P pass uses the unfiltered offer reader and a legal history size', () => {
+  const workerSource = readFileSync(
+    new URL('../src/background/service-worker.ts', import.meta.url),
+    'utf8',
+  );
+  const pass = workerSource.slice(
+    workerSource.indexOf('async function runP2PTrackingPass'),
+    workerSource.indexOf('async function registerAlarms'),
+  );
+
+  assert.doesNotMatch(pass, /provider\.readTradeOffers\(\)/);
+  // Both the tracker and the cancellation pass read it.
+  assert.equal(
+    (pass.match(/readTradeOffersForDisplay\(\{ received: false \}\)/g) ?? []).length,
+    2,
+  );
+  assert.match(pass, /provider\.readRecentTrades\(100\)/);
+
+  const providerSource = readFileSync(
+    new URL('../src/background/steam-read-session-provider.ts', import.meta.url),
+    'utf8',
+  );
+  // The cap that made 200 illegal, and the filter that made the other reader
+  // the wrong one. If either moves, this test is the reminder.
+  assert.match(providerSource, /maxTrades > 100/);
+  assert.match(providerSource, /if \(state !== 3\) return \[\];/);
+});
