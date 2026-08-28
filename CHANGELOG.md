@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.14
+
+- The cancellation of Steam offers for sales csboard has already closed no
+  longer sits downstream of the trade-reporting half in the same try block. Any
+  fault in reporting — a Steam history read timing out, say — used to skip
+  cancelling entirely, which is backwards: reporting only informs, while
+  cancelling is what stops a skin leaving for money that has already gone back.
+- The cancellation pass now reports what it did on every run that had work.
+  Cancelled-but-Steam-still-lists-it-alive produced complete silence before, so
+  a half-closed sale left nothing in the console to find.
+
 ## 1.1.13
 
 - The toolbar icon now carries a count of the sales waiting on you, and the

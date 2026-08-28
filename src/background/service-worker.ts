@@ -2151,8 +2151,27 @@ async function performAutomaticPortfolioSync(epoch: number): Promise<void> {
   extension carries the same catch-up.
 */
 async function runP2PTrackingPass(): Promise<void> {
+  let provider: Awaited<ReturnType<typeof getSteamReadProvider>>;
   try {
-    const provider = await getSteamReadProvider();
+    provider = await getSteamReadProvider();
+  } catch (error) {
+    // No usable Steam session: nothing below can read anything. Quiet, because
+    // this runs on a timer and being signed out is not a fault.
+    logger.warn('P2P pass has no Steam session', { error: String(error) });
+    return;
+  }
+
+  /*
+    Three separate jobs, three separate failures.
+
+    They used to share one try block with the cancellations last, so ANY fault
+    in the reporting half — a Steam history read timing out, say — skipped the
+    cancellation entirely. That is the wrong way round: reporting is best-effort
+    telemetry, while cancelling an offer for a sale csboard has already closed
+    is the step that keeps a skin from leaving for money that went back. It must
+    not be starved by the half that only informs.
+  */
+  try {
     await trackP2PTrades(
       async () => {
         const result = await provider.readTradeOffers();
@@ -2193,18 +2212,25 @@ async function runP2PTrackingPass(): Promise<void> {
       Steam offer still sitting in the seller's outbox, and one tap there sends
       the skin for a sale that no longer exists. Only this browser can close it.
     */
+  } catch (error) {
+    logger.warn('P2P trade reporting failed', { error: String(error) });
+  }
+
+  try {
     await runP2PCancellations(async () => {
       const result = await provider.readTradeOffers();
       return result.offers.map((offer) => ({ offerId: offer.offerId, state: offer.state }));
     });
+  } catch (error) {
+    logger.warn('P2P cancellation pass failed', { error: String(error) });
+  }
 
+  try {
     // The pass may have just accepted, sent or expired something, so the number
     // on the icon is stale by the time we get here.
     await runSalesBadgePass();
   } catch (error) {
-    // A browser with no usable Steam session reads nothing and the pass ends
-    // quietly: this runs on a timer, and being signed out is not a fault.
-    logger.warn('P2P trade tracking pass failed', { error: String(error) });
+    logger.warn('Sales badge refresh failed', { error: String(error) });
   }
 }
 

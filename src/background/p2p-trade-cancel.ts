@@ -244,6 +244,17 @@ export async function runP2PCancellations(
   if (queue.length === 0) return;
   const liveOrderIds = new Set(queue.map((item) => item.orderId));
   const attempts = await readAttempts();
+  /*
+    A pass that has work says what it did, every time.
+
+    The first version logged only on a refusal or a verified cancel, so the most
+    interesting outcome — cancelled, but Steam still reports it alive, so no
+    confirmation was sent — produced complete silence. Two orders sat half-closed
+    with a dead offer in Steam and a queue entry on the server, and the console
+    had nothing to say about either. Silence is not evidence of nothing
+    happening.
+  */
+  const tally = { queued: queue.length, alreadyDead: 0, cancelled: 0, refused: 0, confirmed: 0, stillLive: 0 };
 
   /*
     A queued cancellation overrides the slow pace.
@@ -292,6 +303,8 @@ export async function runP2PCancellations(
   for (const item of alreadyDead.slice(0, MAX_CANCELS_PER_PASS)) {
     await confirmCancelled(item);
     delete attempts[item.orderId];
+    tally.alreadyDead += 1;
+    tally.confirmed += 1;
   }
   if (alreadyDead.length > MAX_CANCELS_PER_PASS) {
     logger.info('More already-dead offers than one pass confirms', { queued: alreadyDead.length });
@@ -299,6 +312,7 @@ export async function runP2PCancellations(
 
   if (work.length === 0) {
     await writeAttempts(attempts, liveOrderIds);
+    logger.info('Cancellation pass', tally);
     return;
   }
 
@@ -322,6 +336,9 @@ export async function runP2PCancellations(
         attempt: n,
         givingUp: n >= MAX_CANCEL_ATTEMPTS,
       });
+      tally.refused += 1;
+    } else {
+      tally.cancelled += 1;
     }
   }
 
@@ -342,6 +359,7 @@ export async function runP2PCancellations(
   } catch (error) {
     logger.warn('Could not verify cancellations', { error: String(error) });
     await writeAttempts(attempts, liveOrderIds);
+    logger.info('Cancellation pass', { ...tally, verifyFailed: true });
     return;
   }
 
@@ -350,12 +368,27 @@ export async function runP2PCancellations(
     if (state !== undefined && OFFER_DEAD_STATES.has(state)) {
       await confirmCancelled(item);
       delete attempts[item.orderId];
+      tally.confirmed += 1;
       logger.info('Offer cancelled and verified', {
         orderId: item.orderId,
         steamTradeOfferId: item.steamTradeOfferId,
         state,
       });
-    } else if (!attempts[item.orderId]) {
+      continue;
+    }
+    /*
+      Cancelled, and Steam still does not call it dead. Almost always its list
+      lagging by a few seconds, which the next pass clears through the
+      already-dead branch — but it is exactly the case that used to vanish
+      without a trace, so it is counted and named.
+    */
+    tally.stillLive += 1;
+    logger.warn('Cancelled but not yet confirmed dead by Steam', {
+      orderId: item.orderId,
+      steamTradeOfferId: item.steamTradeOfferId,
+      steamState: state ?? 'not-in-offer-list',
+    });
+    if (!attempts[item.orderId]) {
       /*
         The POST was accepted and the offer is still not dead. That is a
         failure of the outcome, not of the call, and it counts against the
@@ -367,4 +400,5 @@ export async function runP2PCancellations(
   }
 
   await writeAttempts(attempts, liveOrderIds);
+  logger.info('Cancellation pass', tally);
 }
