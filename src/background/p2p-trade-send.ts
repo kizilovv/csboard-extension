@@ -21,6 +21,7 @@
 
 import { getApiBase } from '../shared/config';
 import { createLogger } from '../shared/logger';
+import { TRACK_PERIOD_FAST_MINUTES, registerP2PTrackAlarm } from './p2p-trade-tracker';
 import {
   P2P_TAB_SEND_COMMAND,
   parseTradeUrl,
@@ -168,6 +169,22 @@ export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutc
     if (!result.ok) return result;
 
     await reportSent(instruction, result);
+
+    /*
+      A fresh send overrides the slow pace, for the same reason a queued
+      cancellation does.
+
+      The pace follows the watch list, and a seller with nothing in flight has
+      left the tracker parked at hourly — which is exactly the state he is in
+      one second before he sends his only sale. An offer waiting on Steam Guard
+      sits at `trade_pending` until someone reports it Active, and until that
+      report the site keeps telling him his item still needs sending. Waiting up
+      to an hour to look at an offer created just now is the whole complaint.
+
+      Chrome replaces a same-named alarm, so this only pulls the next pass
+      forward; the pass itself re-decides the pace from what it finds.
+    */
+    registerP2PTrackAlarm(TRACK_PERIOD_FAST_MINUTES);
 
     return {
       ok: true,
