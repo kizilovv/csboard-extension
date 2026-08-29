@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.15
+
+- Portfolio sync no longer aborts when Steam returns an empty, zero or
+  out-of-range optional expiration or escrow timestamp. Valid epoch seconds
+  are retained; invalid optional metadata is omitted before DTO validation.
+
 ## 1.1.14
 
 - Fixed the reason no cancellation was ever confirmed and no trade history was

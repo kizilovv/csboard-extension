@@ -351,6 +351,58 @@ test('Steam offer read omits the warning when the complete result is within the 
   assert.equal(result.offers[0]?.marketplaceHint, 'buff163');
 });
 
+test('Steam offer read omits invalid optional timestamps before portfolio validation', async () => {
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('https://steamcommunity.com/')) return tokenPage(url);
+    return new Response(JSON.stringify({
+      response: {
+        descriptions: [],
+        trade_offers_received: [
+          {
+            ...rawOffer(7, 1_700_000_007),
+            expiration_time: null,
+            escrow_end_date: '1800000007',
+          },
+          {
+            ...rawOffer(8, 1_700_000_008),
+            expiration_time: '1800000008',
+            escrow_end_date: 0,
+          },
+          {
+            ...rawOffer(9, 1_700_000_009),
+            expiration_time: '',
+            escrow_end_date: null,
+          },
+          {
+            ...rawOffer(10, 1_700_000_010),
+            expiration_time: 10_000_000_000,
+            escrow_end_date: 1_800_000_010_000,
+          },
+        ],
+        trade_offers_sent: [],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const result = await createSteamReadSessionProvider({ steamId: STEAM_ID, fetchImpl })
+    .readTradeOffers();
+
+  assert.deepEqual(
+    result.offers.map(({ offerId, expiresAt, escrowEndAt }) => ({
+      offerId,
+      expiresAt,
+      escrowEndAt,
+    })),
+    [
+      { offerId: '10', expiresAt: undefined, escrowEndAt: undefined },
+      { offerId: '9', expiresAt: undefined, escrowEndAt: undefined },
+      { offerId: '8', expiresAt: 1_800_000_008, escrowEndAt: undefined },
+      { offerId: '7', expiresAt: undefined, escrowEndAt: 1_800_000_007 },
+    ],
+  );
+});
+
 test('Steam offer cap and warning count accepted rows only', async () => {
   const ignoredOffers = Array.from(
     { length: MAX_PORTFOLIO_OFFERS_PER_RUN + 2 },
