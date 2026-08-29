@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CSBoard - Tool For CS2 Trading",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "CS2 price comparison, user-confirmed Steam Market tools, and opt-in encrypted portfolio sync.",
   "homepage_url": "https://csboard.com",
   "icons": {
