@@ -2,6 +2,13 @@
 
 ## 1.1.16
 
+- The site can ask for a tracking pass NOW, so "I confirmed it in Steam Guard"
+  stops meaning "wait for an alarm". Confirming an offer in Guard tells us
+  nothing on its own: until the next pass the order page still says the item
+  needs sending, which is how one sale collected three Guard confirmations in
+  half an hour. The new command carries no payload and reports no findings —
+  the pass tells csboard what it saw through its usual route, and the page
+  re-reads its own order.
 - Sending a P2P trade no longer opens a Steam window. The offer is POSTed from
   the service worker, the way CSFloat does it: `sessionid` is read from
   `g_sessionID` on a signed-in Steam page, the login cookies ride on the request

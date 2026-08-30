@@ -37,6 +37,19 @@ export const EXTERNAL_RUN_SYNC_MESSAGE_TYPE = 'RUN_MANUAL_SYNC' as const;
   seller pick a different skin, and this path never consults it.
 */
 export const EXTERNAL_SEND_TRADE_MESSAGE_TYPE = 'P2P_SEND_TRADE' as const;
+/*
+  Look at Steam now instead of at the next alarm.
+
+  After the seller confirms an offer in Steam Guard, nothing tells us: the
+  tracking pass finds it on its own schedule, and until it does the site still
+  says the item needs sending. The seller has just done the thing and the page
+  disagrees with him, which is the moment he presses Send a second time.
+
+  So the page can ask for the pass to run now. It carries NO payload at all —
+  no order id, nothing — because the pass already knows which sales it is
+  watching, and a command with no fields is a command a page cannot steer.
+*/
+export const EXTERNAL_TRACK_NOW_MESSAGE_TYPE = 'P2P_TRACK_NOW' as const;
 export const EXTERNAL_SYNC_STATUS_MESSAGE_TYPE =
   'GET_PORTFOLIO_SYNC_STATUS' as const;
 const EXTERNAL_PROTOCOL_VERSION = 1 as const;
@@ -129,6 +142,17 @@ export type ExternalStatusResponse =
         readonly code: string;
         readonly detail: string | null;
       };
+    }
+  /*
+    A tracking pass ran. Deliberately says nothing about what it found: the
+    findings go to csboard through the pass's own reporting, and the page reads
+    them back off its order rather than taking the extension's word for them.
+  */
+  | {
+      readonly version: 1;
+      readonly requestId: string;
+      readonly ok: true;
+      readonly data: { readonly ran: true };
     }
   | {
       readonly version: 1;
@@ -255,6 +279,15 @@ export interface ExternalSyncHandlers {
    * Steam.
    */
   sendTradeForOrder(orderId: string): Promise<ExternalSendTradeResult>;
+  /**
+   * Run one tracking pass now, on the sales already being watched.
+   *
+   * Takes nothing and returns nothing on purpose: the page is asking us to
+   * LOOK, not telling us what to find. Whatever the pass sees is reported to
+   * csboard through the same route the scheduled pass uses, so the page learns
+   * the outcome by re-reading its own order, never from this answer.
+   */
+  trackTradesNow(): Promise<void>;
 }
 
 /** What the delivery attempt tells the page. */
@@ -454,6 +487,9 @@ function allowedOriginsForExternalType(
     // to the pairing origins — CSFolder has no orders and no business sending
     // anybody's skins.
     case EXTERNAL_SEND_TRADE_MESSAGE_TYPE:
+    // Same allowlist again: asking us to look at Steam is strictly less than
+    // asking us to send, and it is the same seller's own order either way.
+    case EXTERNAL_TRACK_NOW_MESSAGE_TYPE:
       return options.syncAllowedOrigins;
     default:
       // An unknown type from any origin we speak to at all is INVALID_MESSAGE,
@@ -622,6 +658,30 @@ export async function dispatchExternalMessage(
       ok: true,
       data: { sendFailed: true, code: outcome.code, detail: outcome.detail ?? null },
     };
+  }
+
+  if (type === EXTERNAL_TRACK_NOW_MESSAGE_TYPE) {
+    /*
+      No payload, and that is checked rather than ignored. A message carrying
+      fields is a page trying to steer a pass that is deliberately unsteerable.
+    */
+    const payload = (message as { payload?: unknown } | null)?.payload;
+    const payloadKeys = payload && typeof payload === 'object' ? Object.keys(payload) : [];
+    if (requestId === null || payloadKeys.length !== 0) {
+      return externalError(requestId, 'INVALID_MESSAGE');
+    }
+
+    try {
+      await options.syncHandlers.trackTradesNow();
+    } catch {
+      return externalError(requestId, 'SYNC_TRIGGER_FAILED');
+    }
+    /*
+      `ran: true` means the pass completed, NOT that anything changed. The page
+      finds out what changed by re-reading its own order, because that is the
+      only account of it we would trust anyway.
+    */
+    return { version: 1, requestId, ok: true, data: { ran: true } };
   }
 
   if (type === EXTERNAL_SYNC_STATUS_MESSAGE_TYPE) {
