@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.16
+
+- Sending a P2P trade no longer opens a Steam window. The offer is POSTed from
+  the service worker, the way CSFloat does it: `sessionid` is read from
+  `g_sessionID` on a signed-in Steam page, the login cookies ride on the request
+  under host permission we already hold, and the Referer that Steam insists on
+  is supplied by a declarative rule, since `fetch` may not set that header. The
+  old flow needed a pop-up to survive the browser, a page to finish loading and
+  a content script to answer inside twenty seconds; sellers were getting "check
+  your pop-up blocker" on offers Steam would have accepted.
+- The trade tab remains as a fallback, and only for the two failures a page
+  could plausibly fix: a missing Steam session, or a request refused in a way
+  the worker could not read. An item that is gone, a partner who cannot receive
+  or a trade-banned account are verdicts, and a window teaches the seller
+  nothing he was not just told.
+- No new user-visible permission. `cookies` would be the obvious way to read
+  `sessionid` and is deliberately not taken: Chrome presents it as "read your
+  cookies on all sites", which disables the extension for every existing seller
+  until they re-approve it.
+
 ## 1.1.15
 
 - Portfolio sync no longer aborts when Steam returns an empty, zero or
