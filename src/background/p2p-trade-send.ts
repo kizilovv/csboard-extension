@@ -6,11 +6,14 @@
     1. Ask OUR backend what to send. The page asked only "send order N"; the
        asset, the recipient and the order number all come from the order the
        buyer paid for. A scripted page has nothing to tamper with.
-    2. Open the buyer's trade URL in a tab. Steam's send endpoint needs the
-       `sessionid` cookie, a Referer that is this partner's trade page, and the
-       partner token — a service worker has none of them convincingly.
-    3. Have the content script in that tab post the offer, with a payload built
-       from the instruction rather than from anything on the page.
+    2. POST the offer from HERE, with no window in the seller's face. The
+       `sessionid` cookie is readable (it is not httpOnly), the login cookies
+       ride on `credentials: 'include'`, and the Referer Steam insists on is
+       set by a declarative rule — see src/shared/p2p-offer-post.ts. This step
+       used to open the buyer's trade URL in a tab because a service worker was
+       assumed to hold none of those three; it holds all of them.
+    3. Only if that comes back with something a page could plausibly fix, open
+       the tab and let the content script post it instead.
     4. Tell our backend the offer id, which refuses the report outright if the
        offer did not contain the order's asset.
 
@@ -29,6 +32,7 @@ import {
   type P2PTabSendCommand,
   type P2PTabSendResult,
 } from '../shared/p2p-send-protocol';
+import { postTradeOffer } from '../shared/p2p-offer-post';
 
 const logger = createLogger('p2p-trade-send');
 
@@ -141,6 +145,71 @@ async function reportSent(
   }
 }
 
+/**
+ * Steam's CSRF token, without a page and without the `cookies` permission.
+ *
+ * The obvious route is `chrome.cookies.get` — and it is the wrong one. Two
+ * tests in this repo assert that `cookies` stays out of the manifest, and they
+ * are right to: it is a permission Chrome shows the user as "read your cookies
+ * on all sites", and adding it disables the extension for every existing seller
+ * until they re-approve it. CSFloat does not hold it either.
+ *
+ * Steam prints the same token into every signed-in page as `g_sessionID`, so
+ * one authenticated GET yields it. A signed-OUT browser gets a page without the
+ * variable, which is the answer we want anyway: no session, and the seller is
+ * told exactly that rather than "the offer was refused".
+ */
+const SESSION_ID_PAGE = 'https://steamcommunity.com/market/';
+
+async function readSessionId(): Promise<string | null> {
+  try {
+    const response = await fetch(SESSION_ID_PAGE, {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const match = /g_sessionID\s*=\s*"([^"]+)"/.exec(html);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/*
+  Send it from here, with no window in the seller's face.
+
+  The tab flow below still exists and still works, but it is the fallback now.
+  It needs a pop-up to survive the browser, a page to finish loading, and a
+  content script to boot and answer inside twenty seconds; miss any of those and
+  the seller gets `TAB_UNREACHABLE` on an offer Steam would have taken. That is
+  what he actually sees: a Steam page opening for no clear reason, then a
+  failure telling him to check his pop-up blocker.
+
+  The background POST needs none of it — the cookies ride on the request and the
+  Referer comes from the declarative rule. It is what CSFloat does, and the only
+  reason we did not was the assumption, written into this file's header, that a
+  service worker could not hold those three things convincingly. It can.
+*/
+async function sendFromBackground(
+  instruction: P2PSendInstruction,
+  partner: { partnerSteamId: string; partnerToken: string },
+): Promise<P2PTabSendResult> {
+  const sessionId = await readSessionId();
+  if (!sessionId) return { ok: false, code: 'NO_STEAM_SESSION' };
+
+  return postTradeOffer({
+    sessionId,
+    partnerSteamId: partner.partnerSteamId,
+    partnerToken: partner.partnerToken,
+    assetId: instruction.assetId,
+    appId: instruction.appId,
+    contextId: instruction.contextId,
+    message: instruction.message,
+    // No referer: fetch cannot set it, the declarative rule does.
+  });
+}
+
 export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutcome> {
   const instruction = await fetchInstruction(orderId);
   if ('ok' in instruction) return instruction;
@@ -149,6 +218,34 @@ export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutc
   if (!partner) {
     return { ok: false, code: 'TASK_UNAVAILABLE', detail: 'buyer trade url is not usable' };
   }
+
+  const direct = await sendFromBackground(instruction, partner);
+  if (direct.ok) {
+    await reportSent(instruction, direct);
+    registerP2PTrackAlarm(TRACK_PERIOD_FAST_MINUTES);
+    return {
+      ok: true,
+      steamTradeOfferId: direct.steamTradeOfferId,
+      needsMobileConfirmation: direct.needsMobileConfirmation,
+    };
+  }
+
+  /*
+    Only a refusal that a PAGE could plausibly fix is worth a tab.
+
+    Steam saying the item is gone, the partner cannot receive, or the account is
+    trade-banned is a verdict, not a transport problem: opening a window changes
+    nothing and costs the seller a tab plus twenty seconds. A missing session or
+    a rejected request might genuinely be the header rule or a cookie the worker
+    could not see, and the page has those first-hand — so those, and only those,
+    fall through.
+  */
+  const worthATab = direct.code === 'NO_STEAM_SESSION' || direct.code === 'UNKNOWN';
+  if (!worthATab) return direct;
+  logger.warn('Background send did not go through, falling back to the trade tab', {
+    orderId,
+    code: direct.code,
+  });
 
   const tabId = await openTradeTab(instruction.partnerTradeUrl);
   if (tabId === null) return { ok: false, code: 'TAB_UNREACHABLE' };

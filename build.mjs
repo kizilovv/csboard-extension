@@ -249,9 +249,33 @@ const buildManifest = {
   })),
 };
 
+/*
+  The declarative ruleset is a manifest path too, and it is easy to forget.
+
+  Chrome refuses to LOAD an extension whose rule_resources point at a file that
+  is not in the package — the whole add-on fails, not just the rule. The source
+  manifest names `src/steamcommunity_ruleset.json`; the packaged one has no
+  `src/`, so rewrite the path here and copy the file below.
+*/
+if (srcManifest.declarative_net_request?.rule_resources) {
+  buildManifest.declarative_net_request = {
+    ...srcManifest.declarative_net_request,
+    rule_resources: srcManifest.declarative_net_request.rule_resources.map((r) => ({
+      ...r,
+      path: r.path.split('/').pop(),
+    })),
+  };
+}
+
 writeFileSync(resolve(BUILD, 'manifest.json'), JSON.stringify(buildManifest, null, 2));
 
 // ── Copy static assets ────────────────────────────────────────
+
+// Declarative net request rulesets, named by the manifest above.
+for (const r of srcManifest.declarative_net_request?.rule_resources ?? []) {
+  const name = r.path.split('/').pop();
+  cpSync(resolve(SRC, name), resolve(BUILD, name));
+}
 
 // Styles
 mkdirSync(resolve(BUILD, 'styles'), { recursive: true });
