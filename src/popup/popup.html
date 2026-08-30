@@ -168,18 +168,18 @@
         <p id="portfolio-summary" class="supporting-text">Checking pairing status…</p>
         <p id="portfolio-account" class="mono-detail hidden"></p>
 
-        <form id="pair-form" class="pair-form hidden" autocomplete="off">
-          <label class="field" for="pairing-code-input">
-            <span class="field-label">One-time pairing code</span>
-            <span class="input-with-button">
-              <input id="pairing-code-input" type="text" inputmode="text" maxlength="64" spellcheck="false" placeholder="Enter code from CSFolder" required>
-              <button id="pair-device-btn" class="btn btn-primary btn-compact" type="submit">Pair</button>
-            </span>
-            <span class="pair-help">Generate a 5-minute code in your
-              <a class="text-button" href="https://csfolder.com/portfolio?utm_source=csboard_extension&amp;utm_medium=pairing" target="_blank" rel="noopener noreferrer">CSFolder portfolio</a>.
-            </span>
-          </label>
-        </form>
+        <!--
+          Pairing happens on the website in one click. The code field that used
+          to live here asked the user to fetch a 5-minute string from CSFolder
+          and retype it into a browser popup, for a handshake the site now does
+          by itself. Leaving it in offered a harder second way to do the same
+          thing, and a wrong one to try first.
+        -->
+        <p id="pair-prompt" class="pair-help hidden">
+          Pair from your
+          <a class="text-button" href="https://csfolder.com/portfolio?utm_source=csboard_extension&amp;utm_medium=pairing" target="_blank" rel="noopener noreferrer">CSFolder portfolio</a>.
+          One click there connects this browser.
+        </p>
 
         <details class="privacy-disclosure" open>
           <summary>Data and automatic sync</summary>

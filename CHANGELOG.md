@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.17
+
+- A refusal from csboard reaches the seller as itself. The send used to flatten
+  every backend refusal into "we could not build the trade, reload the page",
+  which is wrong for all of them and dangerous for one: `send_in_progress` means
+  the trade IS going out, and reloading to press again is how a second Steam
+  offer for the same skin gets created. The backend's own code is carried
+  through now, and the site phrases each one.
+- The one-time pairing code is gone from the popup. It asked the user to fetch a
+  5-minute string from CSFolder and retype it into a browser popup, for a
+  handshake the website now completes in one click. The popup points at the
+  CSFolder portfolio instead, and unpairing stays where it was.
+
 ## 1.1.16
 
 - The site can ask for a tracking pass NOW, so "I confirmed it in Steam Guard"

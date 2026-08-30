@@ -127,7 +127,22 @@ export type P2PSendFailure =
   | 'RATE_LIMITED'
   | 'TASK_UNAVAILABLE'      // the backend would not issue an instruction
   | 'NOT_SIGNED_IN_CSBOARD'
-  | 'UNKNOWN';
+  | 'UNKNOWN'
+  /*
+    Whatever csboard called it.
+
+    The backend refuses a send task with its own machine code — `send_in_progress`
+    when a click arrived while the previous one was still in flight,
+    `trade_already_sent` when the offer exists, `order_not_sendable`, and so on.
+    Flattening all of those into TASK_UNAVAILABLE told the seller to reload the
+    page for a state where reloading is not the answer, and threw away a sentence
+    the backend had already written for him.
+
+    Carried through verbatim so the site phrases each one. A code the site does
+    not know still renders honestly, with the code in brackets, which is the same
+    fallback the unknown-code path already had.
+  */
+  | (string & {});
 
 /**
  * The partner id and token, taken from a Steam trade URL.

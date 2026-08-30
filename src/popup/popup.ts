@@ -26,7 +26,6 @@ import {
   type PricePreferenceSyncState,
   type PricePreferenceSyncStatus,
 } from './contracts';
-import { pairingFailureNotice } from './pairing-error-notice';
 
 type NoticeKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -584,8 +583,6 @@ function renderPortfolio(): void {
   const hasPairing = portfolioStatus.connectionState !== 'unpaired';
   const sourceFieldset = element<HTMLFieldSetElement>('#portfolio-sources');
   const portfolioToggle = element<HTMLInputElement>('#portfolio-sync-toggle');
-  const pairingCode = element<HTMLInputElement>('#pairing-code-input');
-  const pairButton = element<HTMLButtonElement>('#pair-device-btn');
   const syncButton = element<HTMLButtonElement>('#sync-portfolio-btn');
   const unpairButton = element<HTMLButtonElement>('#unpair-device-btn');
 
@@ -607,7 +604,7 @@ function renderPortfolio(): void {
   }
 
   setText('#portfolio-summary', portfolioSummary());
-  setHidden('#pair-form', !portfolioContractAvailable || portfolioStatus.connectionState !== 'unpaired');
+  setHidden('#pair-prompt', !portfolioContractAvailable || portfolioStatus.connectionState !== 'unpaired');
   setHidden('#portfolio-enable-row', !portfolioContractAvailable || !paired);
   setHidden('#portfolio-account', !portfolioStatus.steamId);
   if (portfolioStatus.steamId) {
@@ -616,8 +613,6 @@ function renderPortfolio(): void {
 
   portfolioToggle.checked = settings.portfolioSyncEnabled;
   portfolioToggle.disabled = !portfolioContractAvailable || !paired || portfolioBusy || settingsBusy;
-  pairingCode.disabled = portfolioBusy;
-  pairButton.disabled = portfolioBusy;
   sourceFieldset.disabled = !portfolioContractAvailable || !paired || portfolioBusy || settingsBusy;
 
   for (const [source, id] of Object.entries(SOURCE_ELEMENT_IDS) as [PortfolioSource, string][]) {
@@ -658,29 +653,14 @@ async function loadPortfolioStatus(): Promise<void> {
   renderPortfolio();
 }
 
-async function pairDevice(code: string): Promise<void> {
-  portfolioBusy = true;
-  clearNotice();
-  renderPortfolio();
-  try {
-    const response = await sendPopupMessage({
-      type: 'PAIR_DEVICE',
-      version: POPUP_PORTFOLIO_PROTOCOL_VERSION,
-      data: { code },
-    });
-    if (!isRecord(response) || !isRecord(response.status)) {
-      throw new Error('Invalid pairing response');
-    }
-    portfolioStatus = normalizePortfolioStatus(response.status, portfolioStatus);
-    element<HTMLInputElement>('#pairing-code-input').value = '';
-    showNotice('Device paired with CSFolder. Portfolio uploads are still off until you enable them.', 'success');
-  } catch (error) {
-    showNotice(pairingFailureNotice(error), 'error');
-  } finally {
-    portfolioBusy = false;
-    renderPortfolio();
-  }
-}
+/*
+  `pairDevice` lived here and is gone with the code field it served.
+
+  Pairing is a one-click handshake on the website now — the background still
+  answers PAIR_DEVICE for that path, and the popup no longer offers a second,
+  harder way to reach the same state. Unpairing stays: it is the one direction
+  a user may want without leaving the browser.
+*/
 
 async function unpairDevice(): Promise<void> {
   const confirmed = window.confirm('Unpair this browser from CSFolder? Pending local sync data will no longer upload.');
@@ -862,17 +842,6 @@ function bindEvents(): void {
     void syncPreferencesNow();
   });
 
-  element<HTMLFormElement>('#pair-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const input = element<HTMLInputElement>('#pairing-code-input');
-    const code = input.value.trim().toUpperCase();
-    if (!/^CSF-[2-9A-HJ-NP-Z]{4}(?:-[2-9A-HJ-NP-Z]{4}){3}$/.test(code)) {
-      showNotice('Enter the one-time code shown by CSFolder.', 'error');
-      input.focus();
-      return;
-    }
-    void pairDevice(code);
-  });
 
   element<HTMLInputElement>('#portfolio-sync-toggle').addEventListener('change', (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;

@@ -64,13 +64,25 @@ async function fetchInstruction(orderId: string): Promise<P2PSendInstruction | P
   if (response.status === 401) return { ok: false, code: 'NOT_SIGNED_IN_CSBOARD' };
   if (!response.ok) {
     let detail: string | undefined;
+    let code: string | undefined;
     try {
       const body = await response.json();
       // The backend's refusal envelope: a human sentence in `error`, a machine
-      // string in `code`. Carry the sentence — it already says what to do.
+      // string in `code`. Carry both — the sentence already says what to do, and
+      // the code is what lets the site say it in the reader's language.
       detail = typeof body?.error === 'string' ? body.error : undefined;
+      code = typeof body?.code === 'string' && body.code.length > 0 && body.code.length <= 64
+        ? body.code
+        : undefined;
     } catch { /* no body worth reading */ }
-    return { ok: false, code: 'TASK_UNAVAILABLE', detail };
+    /*
+      The backend's own code wins. `send_in_progress` and `trade_already_sent`
+      are not "we could not build the trade" — they are states with their own
+      advice, and TASK_UNAVAILABLE told the seller to reload the page for both.
+      Without a code we fall back to the old one, which is what a genuinely
+      unexplained refusal deserves.
+    */
+    return { ok: false, code: code ?? 'TASK_UNAVAILABLE', detail };
   }
 
   try {
