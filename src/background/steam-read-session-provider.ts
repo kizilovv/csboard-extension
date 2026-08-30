@@ -225,12 +225,11 @@ function optionalInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-function optionalSteamTimestamp(value: unknown): number | undefined {
+function optionalPortfolioTimestamp(value: unknown): number | undefined {
   const timestamp = optionalInteger(value);
-  if (timestamp === undefined || timestamp === 0) return undefined;
-  if (timestamp <= 9_999_999_999) return timestamp;
-  if (timestamp <= 9_999_999_999_000) return Math.floor(timestamp / 1_000);
-  return undefined;
+  return timestamp !== undefined && timestamp >= 1 && timestamp <= 9_999_999_999
+    ? timestamp
+    : undefined;
 }
 
 function buildAssetPropertiesMap(value: unknown): Map<string, Record<string, unknown>> {
@@ -868,8 +867,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       }
       const completedTradeId = optionalString(offer['tradeid'], 32);
       const marketplaceHint = marketplaceHintFromOfferMessage(offer['message']);
-      const expiresAt = optionalSteamTimestamp(offer['expiration_time']);
-      const escrowEndAt = optionalSteamTimestamp(offer['escrow_end_date']);
+      const expiresAt = optionalPortfolioTimestamp(offer['expiration_time']);
+      const escrowEndAt = optionalPortfolioTimestamp(offer['escrow_end_date']);
       return [{
         offerId: requiredDigits(offer['tradeofferid'], `${path}[${index}].tradeofferid`),
         direction,
@@ -956,15 +955,17 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         // The page keys every overlay off the DOM id `tradeofferid_<id>`.
         // Without a usable id there is nothing to attach to.
         if (!offerId || !/^[0-9]+$/.test(offerId)) return [];
-        const expirationTime = optionalSteamTimestamp(offer['expiration_time']);
-        const escrowEndDate = optionalSteamTimestamp(offer['escrow_end_date']);
         return [{
           tradeofferid: offerId,
           accountid_other: optionalString(offer['accountid_other'], 12) ?? '',
           trade_offer_state: optionalInteger(offer['trade_offer_state']) ?? 0,
           time_created: optionalInteger(offer['time_created']) ?? 0,
-          ...(expirationTime !== undefined ? { expiration_time: expirationTime } : {}),
-          ...(escrowEndDate !== undefined ? { escrow_end_date: escrowEndDate } : {}),
+          ...(optionalInteger(offer['expiration_time']) !== undefined
+            ? { expiration_time: optionalInteger(offer['expiration_time']) }
+            : {}),
+          ...(optionalInteger(offer['escrow_end_date']) !== undefined
+            ? { escrow_end_date: optionalInteger(offer['escrow_end_date']) }
+            : {}),
           direction,
           items_to_give: readDisplayItems(
             offer['items_to_give'],

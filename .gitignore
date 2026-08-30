@@ -1,6 +1,9 @@
 node_modules/
 node_modules 2/
 build/
+# Same package as build/, plus the `key` lifted from the installed store copy
+# so an unpacked load keeps the real extension id. Local testing only.
+build-dev/
 dist/
 artifacts/build-meta/
 artifacts/e2e/

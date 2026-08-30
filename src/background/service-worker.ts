@@ -1538,6 +1538,9 @@ registerExternalStatusRouter({
     // everything else against csboard's own record of that order — see
     // p2p-trade-send.ts for why the page is not trusted with the item.
     sendTradeForOrder: (orderId: string) => sendP2PTradeForOrder(orderId),
+    // "I confirmed it in Guard" — look at Steam now rather than at the next
+    // alarm. Same pass the schedule runs; see EXTERNAL_TRACK_NOW_MESSAGE_TYPE.
+    trackTradesNow: () => runP2PTrackingPass(),
   },
   handlers: {
     async isPaired() {

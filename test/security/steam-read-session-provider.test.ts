@@ -351,7 +351,7 @@ test('Steam offer read omits the warning when the complete result is within the 
   assert.equal(result.offers[0]?.marketplaceHint, 'buff163');
 });
 
-test('Steam offer read normalizes optional Steam escrow timestamps before DTO validation', async () => {
+test('Steam offer read omits invalid optional timestamps before portfolio validation', async () => {
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith('https://steamcommunity.com/')) return tokenPage(url);
@@ -359,9 +359,26 @@ test('Steam offer read normalizes optional Steam escrow timestamps before DTO va
       response: {
         descriptions: [],
         trade_offers_received: [
-          { ...rawOffer(8, 1_700_000_008), escrow_end_date: 0 },
-          { ...rawOffer(9, 1_700_000_009), escrow_end_date: 1_800_000_009_000 },
-          { ...rawOffer(10, 1_700_000_010), escrow_end_date: 10_000_000_000_000 },
+          {
+            ...rawOffer(7, 1_700_000_007),
+            expiration_time: null,
+            escrow_end_date: '1800000007',
+          },
+          {
+            ...rawOffer(8, 1_700_000_008),
+            expiration_time: '1800000008',
+            escrow_end_date: 0,
+          },
+          {
+            ...rawOffer(9, 1_700_000_009),
+            expiration_time: '',
+            escrow_end_date: null,
+          },
+          {
+            ...rawOffer(10, 1_700_000_010),
+            expiration_time: 10_000_000_000,
+            escrow_end_date: 1_800_000_010_000,
+          },
         ],
         trade_offers_sent: [],
       },
@@ -372,11 +389,16 @@ test('Steam offer read normalizes optional Steam escrow timestamps before DTO va
     .readTradeOffers();
 
   assert.deepEqual(
-    result.offers.map((offer) => [offer.offerId, offer.escrowEndAt]),
+    result.offers.map(({ offerId, expiresAt, escrowEndAt }) => ({
+      offerId,
+      expiresAt,
+      escrowEndAt,
+    })),
     [
-      ['10', undefined],
-      ['9', 1_800_000_009],
-      ['8', undefined],
+      { offerId: '10', expiresAt: undefined, escrowEndAt: undefined },
+      { offerId: '9', expiresAt: undefined, escrowEndAt: undefined },
+      { offerId: '8', expiresAt: 1_800_000_008, escrowEndAt: undefined },
+      { offerId: '7', expiresAt: undefined, escrowEndAt: 1_800_000_007 },
     ],
   );
 });

@@ -29,7 +29,7 @@ test('service worker pins CSFolder activation and enables exactly two visible so
   assert.doesNotMatch(registration, /UNPAIR_DEVICE|steamLoginSecure|sessionid/);
 });
 
-test('CSBOARD gets exactly three sync commands, on its own origin list', () => {
+test('CSBOARD gets exactly four sync commands, on its own origin list', () => {
   // 1.1.5 said "CSBOARD retains a read-only status probe and nothing else".
   // 1.1.6 moved that line by exactly two commands so the site can ask for the
   // fresh inventory snapshot a listing needs. This test is the record of how
@@ -42,6 +42,12 @@ test('CSBOARD gets exactly three sync commands, on its own origin list', () => {
   // that order. It exists because the alternative was a manual link into
   // Steam's trade window, where a seller picks the items himself and can send a
   // different skin than the one that was bought.
+  //
+  // 2026-08-30 moved it by one more: `trackTradesNow`. It is smaller than the
+  // one before it — the page carries NO payload at all and gets back only that
+  // a pass ran. It exists because after confirming an offer in Steam Guard the
+  // seller waits on an alarm, and a site that still says "send it" while he has
+  // already sent it is how duplicate offers get created.
   //
   // Still NOT here, and each absence is deliberate: no pairing, no credential
   // read, no way to get Steam data back out to the page. CSFolder's origins are
@@ -59,10 +65,11 @@ test('CSBOARD gets exactly three sync commands, on its own origin list', () => {
   assert.match(syncHandlers, /requestManualSync:\s*requestExternalManualSync/);
   assert.match(syncHandlers, /readSyncStatus:\s*readExternalSyncStatus/);
   assert.match(syncHandlers, /sendTradeForOrder:/);
+  assert.match(syncHandlers, /trackTradesNow:/);
   assert.equal(
     syncHandlers.split('\n').filter((line) => /^\s*\w+:/.test(line)).length,
-    3,
-    'the site may trigger a sync, read its state, and deliver a paid order — nothing else',
+    4,
+    'the site may trigger a sync, read its state, deliver a paid order, and ask us to look at Steam — nothing else',
   );
 
   // 1.1.7 moved the line again, and only in one place: an install that is not

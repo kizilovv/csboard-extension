@@ -38,6 +38,18 @@ if ((manifest.host_permissions || []).some((value) =>
   fail('CSFolder external messaging must not grant CSFolder host access');
 }
 
+/*
+  `declarativeNetRequestWithHostAccess` left this list on 2026-08-30, owner's
+  call, and it is the narrow variant on purpose: it can only act where the
+  extension already holds host permission, and our single rule rewrites one
+  header on one exact URL for requests this extension itself initiates. The
+  broad `declarativeNetRequest` stays forbidden — that one reaches everywhere.
+
+  It is here because the trade send moved into the service worker, and Steam
+  refuses a create-offer POST whose Referer is not a trade page. `fetch` may not
+  set that header, so this rule is the only way to send without opening a Steam
+  window in the seller's face.
+*/
 const forbiddenPermissions = new Set([
   'cookies',
   'debugger',
@@ -46,7 +58,6 @@ const forbiddenPermissions = new Set([
   'webRequest',
   'webRequestBlocking',
   'declarativeNetRequest',
-  'declarativeNetRequestWithHostAccess',
 ]);
 for (const permission of manifest.permissions || []) {
   if (forbiddenPermissions.has(permission)) fail(`forbidden broad permission: ${permission}`);
@@ -144,10 +155,25 @@ for (const forbiddenInput of [
   }
 }
 
+/*
+  The worker composes the offer now, so the two strings that compose one are no
+  longer disqualifying. Owner's call, 2026-08-30, after the tab handshake was
+  failing sends outright: sellers were told to check their pop-up blocker on
+  offers Steam would have accepted.
+
+  What this costs, stated plainly: a compromised service worker can build a
+  trade offer with no Steam page in front of it. What it does not cost: the
+  asset and the recipient still arrive as an instruction from OUR backend, and
+  `annotate-trade` still refuses any report whose given assets do not contain
+  the order's own asset — so a substituted or invented offer cannot be recorded
+  against a sale.
+
+  The rest of this list is untouched and must stay that way. Those are commands
+  a PAGE can push at the worker, which is a different risk from the worker
+  carrying out an instruction our own server issued.
+*/
 const serviceWorker = readFileSync(resolve(root, 'build/service-worker.js'), 'utf8');
 for (const forbiddenCapability of [
-  '/tradeoffer/new/send',
-  'trade_offer_access_token',
   '/api/p2p/ext/',
   'P2P_CREATE_AND_ANNOTATE',
   'P2P_BUY',
