@@ -32,6 +32,7 @@ import {
   upsertCsfolderScreenshotAction,
 } from '../../shared/inspect-actions';
 import { MARKETPLACE_BRAND_ICON_DATA_URLS } from '../../shared/marketplace-brand-icons';
+import { resolveInventoryLookupItem } from '../../shared/inventory-lookup';
 
 const logger = createLogger('inventory');
 
@@ -775,19 +776,8 @@ const setupObserver = (): void => {
 type LookupAnchor = {
   row: Element;
   itemName: string;
-  assetId?: string;
   inspectLink?: HTMLAnchorElement;
   inspectHref?: string;
-};
-
-const getAssetIdFromInspectHref = (href: string): string | undefined => {
-  let normalizedHref = href;
-  try {
-    normalizedHref = decodeURIComponent(href);
-  } catch {
-    // A malformed third-party href is not a reason to break the generic link.
-  }
-  return normalizedHref.match(/A(\d+)D/i)?.[1];
 };
 
 const STEAM_INSPECT_SELECTOR =
@@ -832,11 +822,9 @@ const findLookupAnchors = (): LookupAnchor[] => {
     seen.add(row);
     const inspectLink = findInspectLinkNear(row);
     const inspectHref = inspectLink?.href;
-    const assetId = inspectHref ? getAssetIdFromInspectHref(inspectHref) : undefined;
     out.push({
       row,
       itemName,
-      ...(assetId ? { assetId } : {}),
       ...(inspectLink ? { inspectLink } : {}),
       ...(inspectHref ? { inspectHref } : {}),
     });
@@ -860,11 +848,9 @@ const findLookupAnchors = (): LookupAnchor[] => {
       if (!itemName) return;
 
       seen.add(wrapper);
-      const assetId = getAssetIdFromInspectHref(btn.href);
       out.push({
         row: wrapper,
         itemName,
-        ...(assetId ? { assetId } : {}),
         inspectLink: btn,
         inspectHref: btn.href,
       });
@@ -975,7 +961,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     // the first anchor whose item we actually resolved.
     let sellAnchor: { block: Element; item: any } | null = null;
 
-    const { row, itemName, assetId, inspectLink, inspectHref } = primaryAnchor;
+    const { row, itemName, inspectLink, inspectHref } = primaryAnchor;
     if (inspectLink) {
       const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
       upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
@@ -983,18 +969,19 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
 
     const next = row.nextElementSibling as Element | null;
 
-    const exactItem = assetId
-      ? items.find((candidate: any) => candidate.assetid === assetId)
-      : undefined;
-    const nameMatches = assetId
-      ? []
-      : items.filter(
-        (candidate: any) =>
-          candidate.market_hash_name === itemName || candidate.name === itemName,
-      );
-    // If the panel does not expose an asset id, metadata is exact only when
-    // the name resolves to one item. Duplicate knives/gloves stay generic.
-    const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
+    // Steam's new v2 inspect payload is opaque and no longer includes the old
+    // A<assetid>D token. The selected inventory card still carries the exact
+    // `730_<context>_<asset>` id through `.activeInfo`, so use it before the
+    // unique-name fallback. This preserves the wear suffix needed by buffIds.
+    const activeInventoryElementId = document.querySelector<HTMLElement>(
+      '.item.app730.activeInfo[id]',
+    )?.id;
+    const item = resolveInventoryLookupItem(
+      items,
+      itemName,
+      inspectHref,
+      activeInventoryElementId,
+    );
     let block: HTMLElement;
     let shouldRefreshSellPanel = false;
     if (next?.classList.contains(MARKETPLACE_ACTIONS_CLASS)) {
