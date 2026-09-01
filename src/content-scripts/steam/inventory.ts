@@ -756,11 +756,10 @@ const setupObserver = (): void => {
 };
 
 // ============================================================
-// Lookup links injected into the same action layer as "Inspect in Game".
-// Steam's redesigned panel places transparent click layers over the title/game
-// row, so controls attached there can look correct while receiving no clicks.
-// The native inspect action layer is already interactive and survives panel
-// rerenders; we re-run on every click + mutation and remove stale blocks first.
+// CSFloat 5.17.0 injects a custom element immediately after this same game row
+// and renders its interactive controls in Shadow DOM. Match that proven pattern
+// so Steam's React event delegation sees only our host, not the internal links.
+// We re-run on every click + mutation and remove stale blocks first.
 // ============================================================
 
 // Find every "anchor row" we can attach the lookup block beside. We support
@@ -877,7 +876,7 @@ const findLookupAnchors = (): LookupAnchor[] => {
 const buildLookupBlock = (
   item: any,
   itemName: string,
-): HTMLDivElement => {
+): HTMLElement => {
   const dPhase = item?.dopplerPhase as string | undefined;
   // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
   // Souvenir) — the DOM-scraped `itemName` is the display title and often drops
@@ -887,13 +886,48 @@ const buildLookupBlock = (
   const csfloatHref = buildCsfloatUrlForInventoryItem(item, linkName);
   const csboardHref = getCsboardLink(linkName, dPhase);
 
-  const block = document.createElement('div');
+  const block = document.createElement('csboard-lookup-actions');
   block.className = 'csboard-lookup-inline';
-  block.innerHTML = `
-    <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Lookup on BUFF</a>
-    <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">Lookup on CSFloat</a>
-    <a href="${csboardHref}" target="_blank" rel="noopener noreferrer" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">Lookup on CSBOARD</a>
+  const shadow = block.attachShadow({ mode: 'open' });
+  shadow.innerHTML = `
+    <style>
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font: 15px/1.25 Arial, Helvetica, Verdana, sans-serif;
+        text-decoration: none;
+        cursor: pointer;
+        pointer-events: auto;
+      }
+      a:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+    </style>
+    <div class="actions"></div>
   `;
+
+  const actions = shadow.querySelector<HTMLElement>('.actions');
+  if (!actions) return block;
+  const appendAction = (label: string, href: string, color: string): void => {
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    link.style.color = color;
+    actions.appendChild(link);
+  };
+  appendAction('Lookup on BUFF', buffHref, '#ffd866');
+  appendAction('Lookup on CSFloat', csfloatHref, '#7ec1ff');
+  appendAction('Lookup on CSBOARD', csboardHref, '#9eff9e');
   return block;
 };
 
@@ -914,16 +948,13 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     let sellAnchor: { block: Element; item: any } | null = null;
 
     anchors.forEach(({ row, itemName, assetId, inspectLink, inspectHref }) => {
-      // A lookup block without the native action anchor would fall back into
-      // Steam's covered metadata layer and become visible-but-unclickable.
-      if (!inspectLink) return;
+      if (inspectLink) {
+        const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
+        upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
+      }
 
-      const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
-      const screenshotAction = upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
-      const actionAnchor = screenshotAction ?? inspectLink;
-
-      // Skip if we've already injected immediately after the action this pass.
-      const next = actionAnchor.nextElementSibling as Element | null;
+      // Skip if we've already injected immediately after this row this pass.
+      const next = row.nextElementSibling as Element | null;
       if (next?.classList.contains('csboard-lookup-inline')) return;
 
       const exactItem = assetId
@@ -939,7 +970,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       // the name resolves to one item. Duplicate knives/gloves stay generic.
       const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
       const block = buildLookupBlock(item, itemName);
-      actionAnchor.insertAdjacentElement('afterend', block);
+      row.insertAdjacentElement('afterend', block);
 
       decorateAccessoryPrices(row.parentElement ?? row, (name) =>
         priceEngine.getPrice(name));
