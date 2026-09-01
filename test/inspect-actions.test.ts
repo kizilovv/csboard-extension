@@ -137,3 +137,27 @@ test('inventory keeps screenshot out of the volatile top lookup block', () => {
     'the observer must not mistake the generated CSFolder URL for Steam inspect',
   );
 });
+
+test('inventory lookup links share the clickable Inspect in Game action layer', () => {
+  const source = readFileSync(
+    new URL('../src/content-scripts/steam/inventory.ts', import.meta.url),
+    'utf8',
+  );
+  const css = readFileSync(
+    new URL('../src/styles/csboard-overlay.css', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(
+    source,
+    /row\.insertAdjacentElement\('afterend', block\)/,
+    'the game-title row is covered by Steam click layers in the redesigned inventory',
+  );
+  assert.match(source, /const actionAnchor = screenshotAction \?\? inspectLink/);
+  assert.match(source, /actionAnchor\.insertAdjacentElement\('afterend', block\)/);
+  assert.match(
+    css,
+    /\.csboard-lookup-inline\s*{[^}]*pointer-events:\s*auto[^}]*z-index:\s*2147483000/s,
+  );
+  assert.match(css, /\.csboard-lookup-inline\s+a\s*{[^}]*pointer-events:\s*auto/s);
+});
