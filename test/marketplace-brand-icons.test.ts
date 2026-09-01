@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const iconModuleUrl = new URL('../src/shared/marketplace-brand-icons.ts', import.meta.url);
+import { MARKETPLACE_BRAND_ICON_DATA_URLS } from '../src/shared/marketplace-brand-icons.ts';
 
 const EXPECTED_ICONS = {
   buff: {
@@ -24,13 +24,12 @@ const EXPECTED_ICONS = {
 } as const;
 
 test('marketplace actions embed the exact real BUFF, CSFloat, and CSBOARD PNG assets', () => {
-  assert.equal(existsSync(iconModuleUrl), true, 'the real brand-icon module must exist');
-  const source = readFileSync(iconModuleUrl, 'utf8');
-
   for (const [key, expected] of Object.entries(EXPECTED_ICONS)) {
-    const match = source.match(new RegExp(`${key}: 'data:image/png;base64,([^']+)'`));
-    assert.ok(match?.[1], `${key} must be an embedded PNG data URL`);
-    const bytes = Buffer.from(match[1], 'base64');
+    const dataUrl = MARKETPLACE_BRAND_ICON_DATA_URLS[
+      key as keyof typeof MARKETPLACE_BRAND_ICON_DATA_URLS
+    ];
+    assert.match(dataUrl, /^data:image\/png;base64,/);
+    const bytes = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
     assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
     assert.equal(bytes.readUInt32BE(16), expected.width);
     assert.equal(bytes.readUInt32BE(20), expected.height);
