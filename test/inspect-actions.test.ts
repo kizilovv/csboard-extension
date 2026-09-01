@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   buildCsfolderInspectUrl,
   canonicalAccessoryMarketName,
+  upsertCsfolderScreenshotAction,
 } from '../src/shared/inspect-actions.ts';
 
 const inspectLink =
@@ -38,4 +40,95 @@ test('extracts the exact accessory market name without swallowing its scrape lev
     'Sticker | IEM (Gold) | Katowice 2019',
   );
   assert.equal(canonicalAccessoryMarketName('The Overpass Collection'), null);
+});
+
+class FakeClassList {
+  readonly values = new Set<string>();
+
+  add(...names: string[]): void {
+    names.forEach((name) => this.values.add(name));
+  }
+
+  contains(name: string): boolean {
+    return this.values.has(name);
+  }
+}
+
+class FakeAnchor {
+  readonly classList = new FakeClassList();
+  readonly ownerDocument: FakeDocument;
+  nextElementSibling: FakeAnchor | null = null;
+  previousElementSibling: FakeAnchor | null = null;
+  href = '';
+  target = '';
+  rel = '';
+  textContent = '';
+  title = '';
+  removed = false;
+  insertions = 0;
+
+  constructor(ownerDocument: FakeDocument) {
+    this.ownerDocument = ownerDocument;
+  }
+
+  insertAdjacentElement(position: string, element: FakeAnchor): FakeAnchor {
+    assert.equal(position, 'afterend');
+    this.insertions += 1;
+    this.nextElementSibling = element;
+    element.previousElementSibling = this;
+    return element;
+  }
+
+  remove(): void {
+    this.removed = true;
+    if (this.previousElementSibling?.nextElementSibling === this) {
+      this.previousElementSibling.nextElementSibling = null;
+    }
+  }
+}
+
+class FakeDocument {
+  creations = 0;
+
+  createElement(tagName: string): FakeAnchor {
+    assert.equal(tagName, 'a');
+    this.creations += 1;
+    return new FakeAnchor(this);
+  }
+}
+
+test('keeps one screenshot button immediately after Inspect in Game across rerenders', () => {
+  const ownerDocument = new FakeDocument();
+  const inspect = new FakeAnchor(ownerDocument);
+  inspect.href = inspectLink;
+  const screenshotHref = buildCsfolderInspectUrl(inspectLink);
+  assert.ok(screenshotHref);
+
+  const first = upsertCsfolderScreenshotAction(
+    inspect as unknown as HTMLAnchorElement,
+    screenshotHref,
+  );
+  const second = upsertCsfolderScreenshotAction(
+    inspect as unknown as HTMLAnchorElement,
+    screenshotHref,
+  );
+
+  assert.equal(first, second);
+  assert.equal(inspect.nextElementSibling, first);
+  assert.equal(ownerDocument.creations, 1);
+  assert.equal(inspect.insertions, 1);
+  assert.equal(first?.textContent, 'Get screenshot');
+  assert.equal(first?.href, screenshotHref);
+});
+
+test('inventory keeps screenshot out of the volatile top lookup block', () => {
+  const source = readFileSync(
+    new URL('../src/content-scripts/steam/inventory.ts', import.meta.url),
+    'utf8',
+  );
+  const blockStart = source.indexOf('const buildLookupBlock');
+  const blockEnd = source.indexOf('const injectLookupLinksNearInspect');
+  assert.ok(blockStart >= 0 && blockEnd > blockStart);
+  assert.doesNotMatch(source.slice(blockStart, blockEnd), /Get screenshot/);
+  assert.match(source, /upsertCsfolderScreenshotAction\(inspectLink, screenshotHref\)/);
 });
