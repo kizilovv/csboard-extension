@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.18
+
+- The Market totals panel is readable again. On `/market/` it was inserted into
+  Steam's own tab rail — a 30px-tall strip whose tab buttons and "Sell an item"
+  button are absolutely positioned on top of it — so the tabs covered the
+  listings/fees/proceeds line and the rest of the panel spilled out of the strip
+  onto the table of listings below. It now sits under the rail, in normal flow.
+
 ## 1.1.17
 
 - A refusal from csboard reaches the seller as itself. The send used to flatten
