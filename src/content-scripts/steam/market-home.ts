@@ -148,8 +148,17 @@ function ensurePanel(): HTMLElement | null {
   panel.id = 'csboard-market-home';
   panel.className = 'csboard-market-home';
 
+  // #myMarketTabs is a fixed-height rail (30px) whose own children — the tab
+  // strip and the "Sell an item" button — are absolutely positioned. A block
+  // placed inside it is drawn over by the tabs and spills onto the listing
+  // table below, so the panel goes after the rail, in normal flow.
+  const tabWell = document.getElementById('myMarketTabs');
+  if (tabWell) {
+    tabWell.insertAdjacentElement('afterend', panel);
+    return panel;
+  }
+
   const anchor =
-    document.getElementById('myMarketTabs') ??
     document.querySelector('.market_header_text') ??
     document.querySelector('#mainContents');
   if (!anchor) return null;
