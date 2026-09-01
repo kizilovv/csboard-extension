@@ -9,12 +9,14 @@ volatile lookup block while Steam rerenders the detail panel. The BUFF,
 CSFloat, and CSBOARD lookups must remain in their original top metadata area
 and stay clickable inside Steam's React-rendered detail panel.
 
-The implementation reference is the installed CSFloat 5.17.0 inventory
-module. Its `SelectedItemInfo` is injected immediately after the CS2 game row
-for both `#iteminfo0` and `#iteminfo1`, and its controls render inside a custom
-element's Shadow DOM. The same insertion and event-isolation pattern is used
-here. The installed CS2 Trader 3.6.1 inventory bundle was also inspected for
-its Steam inventory lifecycle and observer behavior.
+The final implementation reference is the installed, known-working CSBOARD
+1.1.18 bundle. Its inventory actions are ordinary light-DOM anchors inserted
+immediately after the CS2 game row. User smoke evidence showed the exact
+1.1.18 labels (`Buff`, `CSFloat`, `CSBOARD`) alternating with the 1.1.19 labels
+(`Lookup on ...`). Both enabled builds used `.csboard-lookup-inline`, and both
+MutationObservers removed that class. The shared DOM ownership caused a live
+anchor to disappear between pointer down and click. The earlier CSFloat-style
+Shadow DOM attempt did not solve that cross-version ownership race.
 
 ## RED / GREEN report
 
@@ -23,12 +25,13 @@ its Steam inventory lifecycle and observer behavior.
 | Repeated observer passes reuse one screenshot button immediately after `Inspect in Game` | `test/inspect-actions.test.ts` — `keeps one screenshot button immediately after Inspect in Game across rerenders` | `upsertCsfolderScreenshotAction is not a function` | Focused test target: 6/6 PASS |
 | The top BUFF/CSFloat/CSBOARD block never owns `Get screenshot` | `test/inspect-actions.test.ts` — `inventory keeps screenshot out of the volatile top lookup block` | Source fragment still contained `Get screenshot` | Focused test target: 6/6 PASS |
 | The generated CSFolder URL is never rediscovered as a native Steam inspect link | Same inventory wiring test | Native selector accepted any URL containing `csgo_econ_action_preview` | Selector is pinned to `steam://`; focused test target: 6/6 PASS |
-| BUFF, CSFloat, and CSBOARD stay at the top without Steam cancelling them | `test/inspect-actions.test.ts` — `inventory lookup links use the CSFloat Shadow DOM pattern in the top metadata area` | The controls were ordinary light-DOM anchors and the temporary bottom placement failed the requested source assertions | A `csboard-lookup-actions` host is inserted after the game row and owns open Shadow DOM links; focused test and browser interaction QA pass |
+| BUFF, CSFloat, and CSBOARD stay clickable while store 1.1.18 and unpacked 1.1.19 are both enabled | `test/inspect-actions.test.ts` — `inventory lookup actions survive a simultaneously enabled 1.1.18 content script` | 1.1.19 reused `.csboard-lookup-inline`, deleted/rebuilt its own action row, and the focused test failed on the missing isolated class | 1.1.19 owns `.csboard-marketplace-actions-v119`, updates links in place, hides/removes only the 1.1.18 legacy row, and renders three accessible 36×36 logo-only links; focused test and browser interaction QA pass |
 
-RED checkpoints: `968c5e7`, `49ce7df`, `4b0d546`, `283124e`, `e415a60`.
-GREEN implementation checkpoints: `7ac4c31`, `caf5adb`, `2ea4a38`. The
-`caf5adb` bottom-placement attempt was superseded by the reference-based
-Shadow DOM implementation in `2ea4a38` after user smoke feedback.
+RED checkpoints: `968c5e7`, `49ce7df`, `4b0d546`, `283124e`, `e415a60`,
+`04944cf`. GREEN implementation checkpoints: `7ac4c31`, `caf5adb`, `2ea4a38`,
+`caaff62`. The bottom-placement and Shadow DOM attempts were superseded by the
+cross-version-safe light-DOM implementation after successive user smoke
+feedback.
 
 ## Validation
 
@@ -37,10 +40,12 @@ Shadow DOM implementation in `2ea4a38` after user smoke feedback.
 - `npm test` — PASS, 203/203, no skipped tests.
 - `node --experimental-test-coverage --import tsx --test test/inspect-actions.test.ts`
   — `inspect-actions.ts`: 80.20% lines, 84.62% branches, 80.00% functions.
-- In-app browser interaction QA on a localhost Shadow DOM fixture — PASS for
-  BUFF, CSFloat, and CSBOARD. A Steam-like delegated handler saw only the
-  `CSBOARD-LOOKUP-ACTIONS` host; all three URLs changed and
-  `steamCancelled=false`.
+- In-app browser interaction QA on a localhost competing-injector fixture —
+  PASS for BUFF, CSFloat, and CSBOARD. A simulated 1.1.18 injector attempted to
+  recreate the legacy row every 20 ms while 1.1.19 removed it. After hundreds
+  of mutation cycles, the original v1.1.19 node remained connected, zero
+  legacy rows were visible, all links measured 36×36 with empty visible text,
+  and the three click counters advanced 1 → 2 → 3.
 - Store build and package capability audit — PASS.
 - Real bundled service-worker boundary test — PASS, 1/1.
 
@@ -55,6 +60,6 @@ current game-row and native inspect structure, but the test browser does not
 load the unpacked development build. Final extension-in-Steam visual placement
 therefore remains a user smoke test. Browser interaction behavior has no
 committed screenshot baseline, so visual-regression status is INCONCLUSIVE;
-DOM ownership, Shadow DOM event isolation, stable reuse, selector isolation,
-TypeScript compilation, the complete unit suite, and the packaged artifact
-boundary are automated.
+cross-version DOM ownership, stable node reuse, selector isolation, square
+logo-only layout, TypeScript compilation, the complete unit suite, and the
+packaged artifact boundary are automated.
