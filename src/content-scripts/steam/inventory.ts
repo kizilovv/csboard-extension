@@ -31,6 +31,7 @@ import {
   decorateAccessoryPrices,
   upsertCsfolderScreenshotAction,
 } from '../../shared/inspect-actions';
+import { MARKETPLACE_BRAND_ICON_DATA_URLS } from '../../shared/marketplace-brand-icons';
 
 const logger = createLogger('inventory');
 
@@ -881,24 +882,6 @@ type MarketplaceAction = {
   ariaLabel: string;
 };
 
-const MARKETPLACE_LOGOS: Record<MarketplaceAction['key'], string> = {
-  buff: `
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M5 3h8.25c3.2 0 5.25 1.7 5.25 4.45 0 1.7-.86 2.96-2.28 3.65 1.83.64 2.93 2.1 2.93 4.12C19.15 18.8 16.7 21 13 21H5V3Zm4 3.5v3.15h3.7c1.15 0 1.8-.55 1.8-1.55s-.65-1.6-1.8-1.6H9Zm0 6.55v4.45h4.15c1.28 0 2-.78 2-2.2 0-1.47-.75-2.25-2.12-2.25H9Z"/>
-    </svg>`,
-  csfloat: `
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 2.5c3.1 4.03 6.25 7.3 6.25 11.2A6.25 6.25 0 1 1 5.75 13.7C5.75 9.8 8.9 6.53 12 2.5Z" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M8.25 14.25h7.5M9.65 17h4.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/>
-    </svg>`,
-  csboard: `
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect x="4" y="12" width="4" height="8" rx="1"/>
-      <rect x="10" y="7" width="4" height="13" rx="1"/>
-      <rect x="16" y="4" width="4" height="16" rx="1"/>
-    </svg>`,
-};
-
 const marketplaceActionsFor = (item: any, itemName: string): MarketplaceAction[] => {
   const dPhase = item?.dopplerPhase as string | undefined;
   // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
@@ -934,7 +917,12 @@ const updateMarketplaceActionLinks = (
       link.dataset.csboardMarketplace = key;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.innerHTML = MARKETPLACE_LOGOS[key];
+      const logo = document.createElement('img');
+      logo.src = MARKETPLACE_BRAND_ICON_DATA_URLS[key];
+      logo.alt = '';
+      logo.draggable = false;
+      logo.setAttribute('aria-hidden', 'true');
+      link.appendChild(logo);
       block.appendChild(link);
     }
     link.href = href;
@@ -958,6 +946,11 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
   const tryInject = (): boolean => {
     const anchors = findLookupAnchors();
     if (anchors.length === 0) return false;
+    // Steam can expose two matching CS2 rows while it swaps item-detail panes.
+    // Query order follows visual document order, so keep the first visible row
+    // (the upper native game row) and fall back to the first match for old UI.
+    const primaryAnchor = anchors.find(({ row }) => row.getClientRects().length > 0) ?? anchors[0];
+    if (!primaryAnchor) return false;
 
     // Store 1.1.18 uses this legacy class and deletes/recreates it from its own
     // MutationObserver. When store + unpacked builds are enabled together, a
@@ -965,51 +958,61 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     // between pointerdown and click. Remove only the legacy row; the v1.1.19
     // row has its own class and is updated in place below.
     document.querySelectorAll('.csboard-lookup-inline').forEach((el) => el.remove());
+    // Clean up duplicates left by an earlier injector pass. Only the action row
+    // directly owned by the selected upper Steam anchor may survive.
+    document.querySelectorAll(`.${MARKETPLACE_ACTIONS_CLASS}`).forEach((block) => {
+      if (block.previousElementSibling !== primaryAnchor.row) {
+        const orphanedSellPanel = block.nextElementSibling;
+        if (orphanedSellPanel?.classList.contains('csboard-sell-panel')) {
+          orphanedSellPanel.remove();
+        }
+        block.remove();
+      }
+    });
 
     // The sell panel is single-instance (it spends real items — two live copies
     // of the same buttons is how you double-list by accident), so it attaches to
     // the first anchor whose item we actually resolved.
     let sellAnchor: { block: Element; item: any } | null = null;
 
-    anchors.forEach(({ row, itemName, assetId, inspectLink, inspectHref }) => {
-      if (inspectLink) {
-        const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
-        upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
-      }
+    const { row, itemName, assetId, inspectLink, inspectHref } = primaryAnchor;
+    if (inspectLink) {
+      const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
+      upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
+    }
 
-      const next = row.nextElementSibling as Element | null;
+    const next = row.nextElementSibling as Element | null;
 
-      const exactItem = assetId
-        ? items.find((candidate: any) => candidate.assetid === assetId)
-        : undefined;
-      const nameMatches = assetId
-        ? []
-        : items.filter(
-          (candidate: any) =>
-            candidate.market_hash_name === itemName || candidate.name === itemName,
-        );
-      // If the panel does not expose an asset id, metadata is exact only when
-      // the name resolves to one item. Duplicate knives/gloves stay generic.
-      const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
-      let block: HTMLElement;
-      let shouldRefreshSellPanel = false;
-      if (next?.classList.contains(MARKETPLACE_ACTIONS_CLASS)) {
-        block = next as HTMLElement;
-        shouldRefreshSellPanel = updateMarketplaceActionLinks(block, item, itemName);
-      } else {
-        block = buildLookupBlock(item, itemName);
-        row.insertAdjacentElement('afterend', block);
-        shouldRefreshSellPanel = true;
-      }
+    const exactItem = assetId
+      ? items.find((candidate: any) => candidate.assetid === assetId)
+      : undefined;
+    const nameMatches = assetId
+      ? []
+      : items.filter(
+        (candidate: any) =>
+          candidate.market_hash_name === itemName || candidate.name === itemName,
+      );
+    // If the panel does not expose an asset id, metadata is exact only when
+    // the name resolves to one item. Duplicate knives/gloves stay generic.
+    const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
+    let block: HTMLElement;
+    let shouldRefreshSellPanel = false;
+    if (next?.classList.contains(MARKETPLACE_ACTIONS_CLASS)) {
+      block = next as HTMLElement;
+      shouldRefreshSellPanel = updateMarketplaceActionLinks(block, item, itemName);
+    } else {
+      block = buildLookupBlock(item, itemName);
+      row.insertAdjacentElement('afterend', block);
+      shouldRefreshSellPanel = true;
+    }
 
-      decorateAccessoryPrices(row.parentElement ?? row, (name) =>
-        priceEngine.getPrice(name));
+    decorateAccessoryPrices(row.parentElement ?? row, (name) =>
+      priceEngine.getPrice(name));
 
-      const hasSellPanel = block.nextElementSibling?.classList.contains('csboard-sell-panel') === true;
-      if (!sellAnchor && item && (shouldRefreshSellPanel || !hasSellPanel)) {
-        sellAnchor = { block, item };
-      }
-    });
+    const hasSellPanel = block.nextElementSibling?.classList.contains('csboard-sell-panel') === true;
+    if (item && (shouldRefreshSellPanel || !hasSellPanel)) {
+      sellAnchor = { block, item };
+    }
 
     if (sellAnchor) {
       const { block, item } = sellAnchor as { block: Element; item: any };

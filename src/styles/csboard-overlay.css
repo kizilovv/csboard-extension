@@ -548,11 +548,13 @@ a.inventory_item_link { top: 20px !important; }
   outline-offset: 2px;
 }
 
-.csboard-marketplace-action svg {
-  width: 23px;
-  height: 23px;
-  fill: currentColor;
+.csboard-marketplace-action img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
   pointer-events: none;
+  user-select: none;
 }
 
 .csboard-marketplace-action--buff {
