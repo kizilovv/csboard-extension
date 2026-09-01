@@ -756,9 +756,11 @@ const setupObserver = (): void => {
 };
 
 // ============================================================
-// Lookup links injected next to the "Inspect in Game" button — cs2trader
-// pattern. Survives Steam's right-panel rerenders because we re-run on every
-// click + mutation, dedupe by removing stale .csboard-lookup-inline first.
+// Lookup links injected into the same action layer as "Inspect in Game".
+// Steam's redesigned panel places transparent click layers over the title/game
+// row, so controls attached there can look correct while receiving no clicks.
+// The native inspect action layer is already interactive and survives panel
+// rerenders; we re-run on every click + mutation and remove stale blocks first.
 // ============================================================
 
 // Find every "anchor row" we can attach the lookup block beside. We support
@@ -887,8 +889,6 @@ const buildLookupBlock = (
 
   const block = document.createElement('div');
   block.className = 'csboard-lookup-inline';
-  block.style.cssText =
-    'margin: 8px 0; display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 12px; padding: 5px 6px; border: 1px solid rgb(56,64,77); background: rgb(43,48,57); border-radius: 3px;';
   block.innerHTML = `
     <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Lookup on BUFF</a>
     <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">Lookup on CSFloat</a>
@@ -914,13 +914,16 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     let sellAnchor: { block: Element; item: any } | null = null;
 
     anchors.forEach(({ row, itemName, assetId, inspectLink, inspectHref }) => {
-      if (inspectLink) {
-        const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
-        upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
-      }
+      // A lookup block without the native action anchor would fall back into
+      // Steam's covered metadata layer and become visible-but-unclickable.
+      if (!inspectLink) return;
 
-      // Skip if we've already injected immediately after this row this pass.
-      const next = row.nextElementSibling as Element | null;
+      const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
+      const screenshotAction = upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
+      const actionAnchor = screenshotAction ?? inspectLink;
+
+      // Skip if we've already injected immediately after the action this pass.
+      const next = actionAnchor.nextElementSibling as Element | null;
       if (next?.classList.contains('csboard-lookup-inline')) return;
 
       const exactItem = assetId
@@ -936,7 +939,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       // the name resolves to one item. Duplicate knives/gloves stay generic.
       const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
       const block = buildLookupBlock(item, itemName);
-      row.insertAdjacentElement('afterend', block);
+      actionAnchor.insertAdjacentElement('afterend', block);
 
       decorateAccessoryPrices(row.parentElement ?? row, (name) =>
         priceEngine.getPrice(name));
