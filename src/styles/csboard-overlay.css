@@ -481,12 +481,23 @@ a.inventory_item_link { top: 20px !important; }
 }
 
 .csboard-screenshot-action {
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 14px;
   border-radius: 3px;
   background: #ff5b75;
   color: #10151e !important;
+  font-size: 14px;
   font-weight: 700;
+  line-height: 1;
   text-decoration: none;
+  vertical-align: middle;
+}
+
+.csboard-screenshot-inline {
+  margin-left: 8px;
 }
 
 /* Doppler phase badge — top-left corner */

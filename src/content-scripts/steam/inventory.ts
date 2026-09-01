@@ -29,6 +29,7 @@ import { whenEnhancementsEnabled } from '../../shared/enhancements';
 import {
   buildCsfolderInspectUrl,
   decorateAccessoryPrices,
+  upsertCsfolderScreenshotAction,
 } from '../../shared/inspect-actions';
 
 const logger = createLogger('inventory');
@@ -773,6 +774,7 @@ type LookupAnchor = {
   row: Element;
   itemName: string;
   assetId?: string;
+  inspectLink?: HTMLAnchorElement;
   inspectHref?: string;
 };
 
@@ -786,21 +788,19 @@ const getAssetIdFromInspectHref = (href: string): string | undefined => {
   return normalizedHref.match(/A(\d+)D/i)?.[1];
 };
 
-const findInspectHrefNear = (element: Element): string | undefined => {
+const STEAM_INSPECT_SELECTOR =
+  'a[href^="steam://"][href*="csgo_econ_action_preview"]';
+
+const findInspectLinkNear = (element: Element): HTMLAnchorElement | undefined => {
   let scope: Element | null = element;
   for (let depth = 0; scope && scope !== document.body && depth < 8; depth += 1) {
-    const inspectLink = scope.matches('a[href*="csgo_econ_action_preview"]')
+    const inspectLink = scope.matches(STEAM_INSPECT_SELECTOR)
       ? scope as HTMLAnchorElement
-      : scope.querySelector<HTMLAnchorElement>('a[href*="csgo_econ_action_preview"]');
-    if (inspectLink?.href) return inspectLink.href;
+      : scope.querySelector<HTMLAnchorElement>(STEAM_INSPECT_SELECTOR);
+    if (inspectLink?.href) return inspectLink;
     scope = scope.parentElement;
   }
   return undefined;
-};
-
-const findInspectAssetIdNear = (element: Element): string | undefined => {
-  const href = findInspectHrefNear(element);
-  return href ? getAssetIdFromInspectHref(href) : undefined;
 };
 
 const findLookupAnchors = (): LookupAnchor[] => {
@@ -828,21 +828,21 @@ const findLookupAnchors = (): LookupAnchor[] => {
     if (!itemName) return;
 
     seen.add(row);
-    const inspectHref = findInspectHrefNear(row);
-    const assetId = findInspectAssetIdNear(row);
+    const inspectLink = findInspectLinkNear(row);
+    const inspectHref = inspectLink?.href;
+    const assetId = inspectHref ? getAssetIdFromInspectHref(inspectHref) : undefined;
     out.push({
       row,
       itemName,
       ...(assetId ? { assetId } : {}),
+      ...(inspectLink ? { inspectLink } : {}),
       ...(inspectHref ? { inspectHref } : {}),
     });
   });
 
   // Fallback: the "Inspect in Game" button. Matches both new and old UIs.
   if (out.length === 0) {
-    document.querySelectorAll<HTMLAnchorElement>(
-      'a[href*="csgo_econ_action_preview"]'
-    ).forEach((btn) => {
+    document.querySelectorAll<HTMLAnchorElement>(STEAM_INSPECT_SELECTOR).forEach((btn) => {
       const wrapper = btn.parentElement;
       if (!wrapper || seen.has(wrapper)) return;
 
@@ -863,6 +863,7 @@ const findLookupAnchors = (): LookupAnchor[] => {
         row: wrapper,
         itemName,
         ...(assetId ? { assetId } : {}),
+        inspectLink: btn,
         inspectHref: btn.href,
       });
     });
@@ -874,7 +875,6 @@ const findLookupAnchors = (): LookupAnchor[] => {
 const buildLookupBlock = (
   item: any,
   itemName: string,
-  inspectHref?: string,
 ): HTMLDivElement => {
   const dPhase = item?.dopplerPhase as string | undefined;
   // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
@@ -884,14 +884,12 @@ const buildLookupBlock = (
   const buffHref = getBuffLink(linkName, dPhase);
   const csfloatHref = buildCsfloatUrlForInventoryItem(item, linkName);
   const csboardHref = getCsboardLink(linkName, dPhase);
-  const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
 
   const block = document.createElement('div');
   block.className = 'csboard-lookup-inline';
   block.style.cssText =
     'margin: 8px 0; display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 12px; padding: 5px 6px; border: 1px solid rgb(56,64,77); background: rgb(43,48,57); border-radius: 3px;';
   block.innerHTML = `
-    ${screenshotHref ? `<a href="${screenshotHref}" target="_blank" rel="noopener noreferrer" class="csboard-screenshot-action">Get screenshot</a>` : ''}
     <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Lookup on BUFF</a>
     <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">Lookup on CSFloat</a>
     <a href="${csboardHref}" target="_blank" rel="noopener noreferrer" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">Lookup on CSBOARD</a>
@@ -915,7 +913,12 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     // the first anchor whose item we actually resolved.
     let sellAnchor: { block: Element; item: any } | null = null;
 
-    anchors.forEach(({ row, itemName, assetId, inspectHref }) => {
+    anchors.forEach(({ row, itemName, assetId, inspectLink, inspectHref }) => {
+      if (inspectLink) {
+        const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
+        upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
+      }
+
       // Skip if we've already injected immediately after this row this pass.
       const next = row.nextElementSibling as Element | null;
       if (next?.classList.contains('csboard-lookup-inline')) return;
@@ -932,7 +935,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       // If the panel does not expose an asset id, metadata is exact only when
       // the name resolves to one item. Duplicate knives/gloves stay generic.
       const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
-      const block = buildLookupBlock(item, itemName, inspectHref);
+      const block = buildLookupBlock(item, itemName);
       row.insertAdjacentElement('afterend', block);
 
       decorateAccessoryPrices(row.parentElement ?? row, (name) =>

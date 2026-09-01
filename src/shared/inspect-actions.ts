@@ -26,6 +26,38 @@ export function buildCsfolderInspectUrl(
   return `https://csfolder.com${prefix}/inspect/${encodeURIComponent(normalized)}`;
 }
 
+/**
+ * Keep exactly one CSFolder action beside Steam's native Inspect in Game link.
+ * Steam mutates the inventory panel frequently, so an existing button is
+ * updated in place instead of being removed and recreated on every observer
+ * pass (which is visible as flicker).
+ */
+export function upsertCsfolderScreenshotAction(
+  inspectLink: HTMLAnchorElement,
+  screenshotHref: string | null,
+): HTMLAnchorElement | null {
+  const sibling = inspectLink.nextElementSibling;
+  const existing = sibling?.classList.contains('csboard-screenshot-inline')
+    ? sibling as HTMLAnchorElement
+    : null;
+
+  if (!screenshotHref) {
+    existing?.remove();
+    return null;
+  }
+
+  const action = existing ?? inspectLink.ownerDocument.createElement('a');
+  action.classList.add('csboard-screenshot-action', 'csboard-screenshot-inline');
+  action.href = screenshotHref;
+  action.target = '_blank';
+  action.rel = 'noopener noreferrer';
+  action.textContent = 'Get screenshot';
+  action.title = 'Render this item on CSFolder';
+
+  if (!existing) inspectLink.insertAdjacentElement('afterend', action);
+  return action;
+}
+
 /** Pull the first marketable accessory name out of Steam's native row text. */
 export function canonicalAccessoryMarketName(text: string): string | null {
   const normalized = text.replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
