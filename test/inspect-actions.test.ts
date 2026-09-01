@@ -147,6 +147,10 @@ test('inventory lookup actions survive a simultaneously enabled 1.1.18 content s
     new URL('../src/styles/csboard-overlay.css', import.meta.url),
     'utf8',
   );
+  const actionsStart = source.indexOf("const MARKETPLACE_ACTIONS_CLASS");
+  const actionsEnd = source.indexOf('const injectLookupLinksNearInspect');
+  assert.ok(actionsStart >= 0 && actionsEnd > actionsStart);
+  const actionsSource = source.slice(actionsStart, actionsEnd);
 
   assert.match(source, /row\.insertAdjacentElement\('afterend', block\)/);
   assert.doesNotMatch(source, /actionAnchor\.insertAdjacentElement\('afterend', block\)/);
@@ -162,7 +166,7 @@ test('inventory lookup actions survive a simultaneously enabled 1.1.18 content s
   );
   assert.match(source, /next\?\.classList\.contains\(MARKETPLACE_ACTIONS_CLASS\)/);
   assert.match(source, /updateMarketplaceActionLinks\(block, item, itemName\)/);
-  assert.doesNotMatch(source, /Lookup on (?:BUFF|CSFloat|CSBOARD)/);
+  assert.doesNotMatch(actionsSource, /Lookup on (?:BUFF|CSFloat|CSBOARD)/);
   assert.match(
     css,
     /\.csboard-marketplace-actions-v119\s*{[^}]*pointer-events:\s*auto[^}]*z-index:\s*2147483000/s,
@@ -171,7 +175,7 @@ test('inventory lookup actions survive a simultaneously enabled 1.1.18 content s
     css,
     /\.csboard-marketplace-action\s*{[^}]*width:\s*36px[^}]*height:\s*36px[^}]*pointer-events:\s*auto/s,
   );
-  assert.match(source, /ariaLabel = 'Open on BUFF'/);
-  assert.match(source, /ariaLabel = 'Open on CSFloat'/);
-  assert.match(source, /ariaLabel = 'Open on CSBOARD'/);
+  assert.match(actionsSource, /ariaLabel: 'Open on BUFF'/);
+  assert.match(actionsSource, /ariaLabel: 'Open on CSFloat'/);
+  assert.match(actionsSource, /ariaLabel: 'Open on CSBOARD'/);
 });

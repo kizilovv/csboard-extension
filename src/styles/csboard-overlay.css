@@ -500,31 +500,71 @@ a.inventory_item_link { top: 20px !important; }
   margin-left: 8px;
 }
 
-/* Steam's redesigned inventory overlays parts of the metadata panel with
-   transparent click targets. Keep every lookup action in the native inspect
-   action layer and explicitly opt its links back into hit testing. */
+/* A concurrently enabled store 1.1.18 build owns this legacy class and keeps
+   recreating it. Hide that transient row while v1.1.19 removes it. */
 .csboard-lookup-inline {
+  display: none !important;
+}
+
+/* Isolated from the 1.1.18 class so two enabled builds cannot delete each
+   other's anchors between pointerdown and click. */
+.csboard-marketplace-actions-v119 {
   position: relative;
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
   gap: 6px;
   width: fit-content;
   max-width: 100%;
   margin: 8px 0;
-  padding: 5px 6px;
-  border: 1px solid rgb(56, 64, 77);
-  border-radius: 3px;
-  background: rgb(43, 48, 57);
-  font-size: 12px;
   pointer-events: auto;
   z-index: 2147483000;
 }
 
-.csboard-lookup-inline a {
+.csboard-marketplace-action {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  box-sizing: border-box;
+  border: 1px solid #465468;
+  border-radius: 5px;
+  background: #2b3039;
+  color: #c7d5e0;
+  text-decoration: none;
   z-index: 1;
   pointer-events: auto;
   cursor: pointer;
+}
+
+.csboard-marketplace-action:hover {
+  border-color: currentColor;
+  background: #36404d;
+  transform: translateY(-1px);
+}
+
+.csboard-marketplace-action:focus-visible {
+  outline: 2px solid #67c1f5;
+  outline-offset: 2px;
+}
+
+.csboard-marketplace-action svg {
+  width: 23px;
+  height: 23px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.csboard-marketplace-action--buff {
+  color: #ffd866;
+}
+
+.csboard-marketplace-action--csfloat {
+  color: #7ec1ff;
+}
+
+.csboard-marketplace-action--csboard {
+  color: #9eff9e;
 }
 
 /* Doppler phase badge — top-left corner */

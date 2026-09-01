@@ -873,61 +873,84 @@ const findLookupAnchors = (): LookupAnchor[] => {
   return out;
 };
 
-const buildLookupBlock = (
-  item: any,
-  itemName: string,
-): HTMLElement => {
+const MARKETPLACE_ACTIONS_CLASS = 'csboard-marketplace-actions-v119';
+
+type MarketplaceAction = {
+  key: 'buff' | 'csfloat' | 'csboard';
+  href: string;
+  ariaLabel: string;
+};
+
+const MARKETPLACE_LOGOS: Record<MarketplaceAction['key'], string> = {
+  buff: `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 3h8.25c3.2 0 5.25 1.7 5.25 4.45 0 1.7-.86 2.96-2.28 3.65 1.83.64 2.93 2.1 2.93 4.12C19.15 18.8 16.7 21 13 21H5V3Zm4 3.5v3.15h3.7c1.15 0 1.8-.55 1.8-1.55s-.65-1.6-1.8-1.6H9Zm0 6.55v4.45h4.15c1.28 0 2-.78 2-2.2 0-1.47-.75-2.25-2.12-2.25H9Z"/>
+    </svg>`,
+  csfloat: `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 2.5c3.1 4.03 6.25 7.3 6.25 11.2A6.25 6.25 0 1 1 5.75 13.7C5.75 9.8 8.9 6.53 12 2.5Z" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M8.25 14.25h7.5M9.65 17h4.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/>
+    </svg>`,
+  csboard: `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="4" y="12" width="4" height="8" rx="1"/>
+      <rect x="10" y="7" width="4" height="13" rx="1"/>
+      <rect x="16" y="4" width="4" height="16" rx="1"/>
+    </svg>`,
+};
+
+const marketplaceActionsFor = (item: any, itemName: string): MarketplaceAction[] => {
   const dPhase = item?.dopplerPhase as string | undefined;
   // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
   // Souvenir) — the DOM-scraped `itemName` is the display title and often drops
   // the wear/quality, which produced wear-less Buff/CSFloat/CSBOARD links.
   const linkName = (item?.market_hash_name as string) || itemName;
-  const buffHref = getBuffLink(linkName, dPhase);
-  const csfloatHref = buildCsfloatUrlForInventoryItem(item, linkName);
-  const csboardHref = getCsboardLink(linkName, dPhase);
+  return [
+    { key: 'buff', href: getBuffLink(linkName, dPhase), ariaLabel: 'Open on BUFF' },
+    {
+      key: 'csfloat',
+      href: buildCsfloatUrlForInventoryItem(item, linkName),
+      ariaLabel: 'Open on CSFloat',
+    },
+    { key: 'csboard', href: getCsboardLink(linkName, dPhase), ariaLabel: 'Open on CSBOARD' },
+  ];
+};
 
-  const block = document.createElement('csboard-lookup-actions');
-  block.className = 'csboard-lookup-inline';
-  const shadow = block.attachShadow({ mode: 'open' });
-  shadow.innerHTML = `
-    <style>
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      a {
-        display: inline-flex;
-        align-items: center;
-        min-height: 24px;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font: 15px/1.25 Arial, Helvetica, Verdana, sans-serif;
-        text-decoration: none;
-        cursor: pointer;
-        pointer-events: auto;
-      }
-      a:hover {
-        background: rgba(255, 255, 255, 0.08);
-      }
-    </style>
-    <div class="actions"></div>
-  `;
+const updateMarketplaceActionLinks = (
+  block: HTMLElement,
+  item: any,
+  itemName: string,
+): boolean => {
+  const linkName = (item?.market_hash_name as string) || itemName;
+  const itemKey = `${item?.assetid || ''}:${linkName}`;
+  const itemChanged = block.dataset.csboardItemKey !== itemKey;
+  block.dataset.csboardItemKey = itemKey;
 
-  const actions = shadow.querySelector<HTMLElement>('.actions');
-  if (!actions) return block;
-  const appendAction = (label: string, href: string, color: string): void => {
-    const link = document.createElement('a');
+  marketplaceActionsFor(item, itemName).forEach(({ key, href, ariaLabel }) => {
+    let link = block.querySelector<HTMLAnchorElement>(`[data-csboard-marketplace="${key}"]`);
+    if (!link) {
+      link = document.createElement('a');
+      link.className = `csboard-marketplace-action csboard-marketplace-action--${key}`;
+      link.dataset.csboardMarketplace = key;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.innerHTML = MARKETPLACE_LOGOS[key];
+      block.appendChild(link);
+    }
     link.href = href;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = label;
-    link.style.color = color;
-    actions.appendChild(link);
-  };
-  appendAction('Lookup on BUFF', buffHref, '#ffd866');
-  appendAction('Lookup on CSFloat', csfloatHref, '#7ec1ff');
-  appendAction('Lookup on CSBOARD', csboardHref, '#9eff9e');
+    link.ariaLabel = ariaLabel;
+    link.title = ariaLabel;
+  });
+
+  return itemChanged;
+};
+
+const buildLookupBlock = (item: any, itemName: string): HTMLElement => {
+  const block = document.createElement('div');
+  block.className = MARKETPLACE_ACTIONS_CLASS;
+  block.setAttribute('role', 'group');
+  block.setAttribute('aria-label', 'Marketplace actions');
+  updateMarketplaceActionLinks(block, item, itemName);
   return block;
 };
 
@@ -936,11 +959,12 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     const anchors = findLookupAnchors();
     if (anchors.length === 0) return false;
 
-    // Drop stale blocks anywhere they sit — the right panel can re-render with
-    // entirely different containers, so we don't restrict the cleanup scope.
-    // The sell panel goes with them: it is anchored to a lookup block, and an
-    // orphaned panel would keep selling the previously-open item.
-    document.querySelectorAll('.csboard-lookup-inline, .csboard-sell-panel').forEach((el) => el.remove());
+    // Store 1.1.18 uses this legacy class and deletes/recreates it from its own
+    // MutationObserver. When store + unpacked builds are enabled together, a
+    // shared class makes the two injectors remove each other's live anchors
+    // between pointerdown and click. Remove only the legacy row; the v1.1.19
+    // row has its own class and is updated in place below.
+    document.querySelectorAll('.csboard-lookup-inline').forEach((el) => el.remove());
 
     // The sell panel is single-instance (it spends real items — two live copies
     // of the same buttons is how you double-list by accident), so it attaches to
@@ -953,9 +977,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
         upsertCsfolderScreenshotAction(inspectLink, screenshotHref);
       }
 
-      // Skip if we've already injected immediately after this row this pass.
       const next = row.nextElementSibling as Element | null;
-      if (next?.classList.contains('csboard-lookup-inline')) return;
 
       const exactItem = assetId
         ? items.find((candidate: any) => candidate.assetid === assetId)
@@ -969,13 +991,24 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       // If the panel does not expose an asset id, metadata is exact only when
       // the name resolves to one item. Duplicate knives/gloves stay generic.
       const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
-      const block = buildLookupBlock(item, itemName);
-      row.insertAdjacentElement('afterend', block);
+      let block: HTMLElement;
+      let shouldRefreshSellPanel = false;
+      if (next?.classList.contains(MARKETPLACE_ACTIONS_CLASS)) {
+        block = next as HTMLElement;
+        shouldRefreshSellPanel = updateMarketplaceActionLinks(block, item, itemName);
+      } else {
+        block = buildLookupBlock(item, itemName);
+        row.insertAdjacentElement('afterend', block);
+        shouldRefreshSellPanel = true;
+      }
 
       decorateAccessoryPrices(row.parentElement ?? row, (name) =>
         priceEngine.getPrice(name));
 
-      if (!sellAnchor && item) sellAnchor = { block, item };
+      const hasSellPanel = block.nextElementSibling?.classList.contains('csboard-sell-panel') === true;
+      if (!sellAnchor && item && (shouldRefreshSellPanel || !hasSellPanel)) {
+        sellAnchor = { block, item };
+      }
     });
 
     if (sellAnchor) {
@@ -1036,7 +1069,9 @@ const setupLookupObserver = (): void => {
   // Anything we render ourselves must be invisible to this observer, otherwise
   // the sell panel's own async re-renders (loading → priced) retrigger the
   // injector that created it — an endless remove/re-add loop.
-  const OURS = ['csboard-lookup-inline', 'csboard-sell-panel', 'csboard-sell-toasts'];
+  // The legacy class is intentionally excluded: if 1.1.18 injects another old
+  // row, that mutation must wake us so we can remove it without touching v1.1.19.
+  const OURS = [MARKETPLACE_ACTIONS_CLASS, 'csboard-sell-panel', 'csboard-sell-toasts'];
   const isOurs = (n: Node): boolean =>
     n.nodeType === Node.ELEMENT_NODE &&
     OURS.some((c) => (n as Element).classList?.contains(c));
