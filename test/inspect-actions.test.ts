@@ -131,4 +131,9 @@ test('inventory keeps screenshot out of the volatile top lookup block', () => {
   assert.ok(blockStart >= 0 && blockEnd > blockStart);
   assert.doesNotMatch(source.slice(blockStart, blockEnd), /Get screenshot/);
   assert.match(source, /upsertCsfolderScreenshotAction\(inspectLink, screenshotHref\)/);
+  assert.match(
+    source,
+    /a\[href\^="steam:\/\/"\]\[href\*="csgo_econ_action_preview"\]/,
+    'the observer must not mistake the generated CSFolder URL for Steam inspect',
+  );
 });
