@@ -30,6 +30,10 @@ import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
 import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import {
+  buildCsfolderInspectUrl,
+  decorateAccessoryPrices,
+} from '../../shared/inspect-actions';
 
 const logger = createLogger('trade-offer');
 
@@ -1745,8 +1749,20 @@ async function init() {
       };
 
       const cDPhase = item?.dopplerPhase;
+      const inspectHref = staticActions.querySelector<HTMLAnchorElement>(
+        'a[href*="csgo_econ_action_preview"]',
+      )?.href ?? popup.querySelector<HTMLAnchorElement>(
+        'a[href*="csgo_econ_action_preview"]',
+      )?.href;
+      const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
+      if (screenshotHref) addLink('Get screenshot', screenshotHref);
       addLink('Lookup on BUFF', getBuffLink(itemName, cDPhase));
       addLink('Lookup on CSFloat', buildCsfloatUrlForTradeItem(item, itemName));
+      addLink('Lookup on CSBOARD', getCsboardLink(itemName, cDPhase));
+      decorateAccessoryPrices(popup, (name) => priceEngine.getPrice(name));
+      setTimeout(() => {
+        decorateAccessoryPrices(popup, (name) => priceEngine.getPrice(name));
+      }, 250);
     }, 100);
   });
 

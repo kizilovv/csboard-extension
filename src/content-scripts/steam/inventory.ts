@@ -26,6 +26,10 @@ import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { setupSellUi, injectSellPanel, repaintSellSelection } from './sell-ui';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
 import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import {
+  buildCsfolderInspectUrl,
+  decorateAccessoryPrices,
+} from '../../shared/inspect-actions';
 
 const logger = createLogger('inventory');
 
@@ -765,7 +769,12 @@ const setupObserver = (): void => {
 //
 // Each entry returned describes WHERE to insert the lookup block AND WHICH
 // item name to use, so we don't depend on now-removed selectors.
-type LookupAnchor = { row: Element; itemName: string; assetId?: string };
+type LookupAnchor = {
+  row: Element;
+  itemName: string;
+  assetId?: string;
+  inspectHref?: string;
+};
 
 const getAssetIdFromInspectHref = (href: string): string | undefined => {
   let normalizedHref = href;
@@ -777,17 +786,21 @@ const getAssetIdFromInspectHref = (href: string): string | undefined => {
   return normalizedHref.match(/A(\d+)D/i)?.[1];
 };
 
-const findInspectAssetIdNear = (element: Element): string | undefined => {
+const findInspectHrefNear = (element: Element): string | undefined => {
   let scope: Element | null = element;
   for (let depth = 0; scope && scope !== document.body && depth < 8; depth += 1) {
     const inspectLink = scope.matches('a[href*="csgo_econ_action_preview"]')
       ? scope as HTMLAnchorElement
       : scope.querySelector<HTMLAnchorElement>('a[href*="csgo_econ_action_preview"]');
-    const assetId = inspectLink ? getAssetIdFromInspectHref(inspectLink.href) : undefined;
-    if (assetId) return assetId;
+    if (inspectLink?.href) return inspectLink.href;
     scope = scope.parentElement;
   }
   return undefined;
+};
+
+const findInspectAssetIdNear = (element: Element): string | undefined => {
+  const href = findInspectHrefNear(element);
+  return href ? getAssetIdFromInspectHref(href) : undefined;
 };
 
 const findLookupAnchors = (): LookupAnchor[] => {
@@ -815,8 +828,14 @@ const findLookupAnchors = (): LookupAnchor[] => {
     if (!itemName) return;
 
     seen.add(row);
+    const inspectHref = findInspectHrefNear(row);
     const assetId = findInspectAssetIdNear(row);
-    out.push(assetId ? { row, itemName, assetId } : { row, itemName });
+    out.push({
+      row,
+      itemName,
+      ...(assetId ? { assetId } : {}),
+      ...(inspectHref ? { inspectHref } : {}),
+    });
   });
 
   // Fallback: the "Inspect in Game" button. Matches both new and old UIs.
@@ -840,14 +859,23 @@ const findLookupAnchors = (): LookupAnchor[] => {
 
       seen.add(wrapper);
       const assetId = getAssetIdFromInspectHref(btn.href);
-      out.push(assetId ? { row: wrapper, itemName, assetId } : { row: wrapper, itemName });
+      out.push({
+        row: wrapper,
+        itemName,
+        ...(assetId ? { assetId } : {}),
+        inspectHref: btn.href,
+      });
     });
   }
 
   return out;
 };
 
-const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
+const buildLookupBlock = (
+  item: any,
+  itemName: string,
+  inspectHref?: string,
+): HTMLDivElement => {
   const dPhase = item?.dopplerPhase as string | undefined;
   // Use the matched item's canonical market_hash_name (carries wear + StatTrak™/
   // Souvenir) — the DOM-scraped `itemName` is the display title and often drops
@@ -856,15 +884,17 @@ const buildLookupBlock = (item: any, itemName: string): HTMLDivElement => {
   const buffHref = getBuffLink(linkName, dPhase);
   const csfloatHref = buildCsfloatUrlForInventoryItem(item, linkName);
   const csboardHref = getCsboardLink(linkName, dPhase);
+  const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
 
   const block = document.createElement('div');
   block.className = 'csboard-lookup-inline';
   block.style.cssText =
     'margin: 8px 0; display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 12px; padding: 5px 6px; border: 1px solid rgb(56,64,77); background: rgb(43,48,57); border-radius: 3px;';
   block.innerHTML = `
-    <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Buff</a>
-    <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">CSFloat</a>
-    <a href="${csboardHref}" target="_blank" rel="noopener noreferrer" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">CSBOARD</a>
+    ${screenshotHref ? `<a href="${screenshotHref}" target="_blank" rel="noopener noreferrer" class="csboard-screenshot-action">Get screenshot</a>` : ''}
+    <a href="${buffHref}" target="_blank" rel="noopener noreferrer" style="color:#ffd866; text-decoration:none; padding:2px 6px;">Lookup on BUFF</a>
+    <a href="${csfloatHref}" target="_blank" rel="noopener noreferrer" style="color:#7ec1ff; text-decoration:none; padding:2px 6px;">Lookup on CSFloat</a>
+    <a href="${csboardHref}" target="_blank" rel="noopener noreferrer" style="color:#9eff9e; text-decoration:none; padding:2px 6px;">Lookup on CSBOARD</a>
   `;
   return block;
 };
@@ -885,7 +915,7 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
     // the first anchor whose item we actually resolved.
     let sellAnchor: { block: Element; item: any } | null = null;
 
-    anchors.forEach(({ row, itemName, assetId }) => {
+    anchors.forEach(({ row, itemName, assetId, inspectHref }) => {
       // Skip if we've already injected immediately after this row this pass.
       const next = row.nextElementSibling as Element | null;
       if (next?.classList.contains('csboard-lookup-inline')) return;
@@ -902,8 +932,11 @@ const injectLookupLinksNearInspect = (_item?: any, _itemName?: string): void => 
       // If the panel does not expose an asset id, metadata is exact only when
       // the name resolves to one item. Duplicate knives/gloves stay generic.
       const item = exactItem || (nameMatches.length === 1 ? nameMatches[0] : undefined);
-      const block = buildLookupBlock(item, itemName);
+      const block = buildLookupBlock(item, itemName, inspectHref);
       row.insertAdjacentElement('afterend', block);
+
+      decorateAccessoryPrices(row.parentElement ?? row, (name) =>
+        priceEngine.getPrice(name));
 
       if (!sellAnchor && item) sellAnchor = { block, item };
     });
@@ -1001,6 +1034,8 @@ const addRightSideElements = (): void => {
     if (el && el.style.display !== 'none') { panel = el; break; }
   }
   if (!panel) return;
+
+  decorateAccessoryPrices(panel, (name) => priceEngine.getPrice(name));
 
   // Remove old csboard elements
   panel.querySelectorAll('.csboard-upper-module, .csboard-detail-price').forEach(e => e.remove());

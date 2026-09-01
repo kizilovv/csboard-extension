@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.19
+
+- Added one-click CSFolder screenshots beside Steam's Inspect in Game action in
+  inventories and trade offers, plus direct CSBOARD lookup links.
+- Sticker rows in Steam item details now show the selected extension price
+  source next to each accessory.
+
 ## 1.1.18
 
 - The Market totals panel is readable again. On `/market/` it was inserted into

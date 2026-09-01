@@ -465,6 +465,30 @@ a.inventory_item_link { top: 20px !important; }
   font-size: 10px;
 }
 
+.csboard-accessory-price {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid rgba(102, 192, 244, 0.35);
+  border-radius: 999px;
+  background: rgba(23, 34, 46, 0.9);
+  color: #9ee6a7;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  vertical-align: middle;
+}
+
+.csboard-screenshot-action {
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #ff5b75;
+  color: #10151e !important;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 /* Doppler phase badge — top-left corner */
 .dopplerPhase {
   position: absolute;
