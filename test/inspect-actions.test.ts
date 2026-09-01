@@ -138,7 +138,7 @@ test('inventory keeps screenshot out of the volatile top lookup block', () => {
   );
 });
 
-test('inventory lookup links use the CSFloat Shadow DOM pattern in the top metadata area', () => {
+test('inventory lookup actions survive a simultaneously enabled 1.1.18 content script', () => {
   const source = readFileSync(
     new URL('../src/content-scripts/steam/inventory.ts', import.meta.url),
     'utf8',
@@ -150,12 +150,28 @@ test('inventory lookup links use the CSFloat Shadow DOM pattern in the top metad
 
   assert.match(source, /row\.insertAdjacentElement\('afterend', block\)/);
   assert.doesNotMatch(source, /actionAnchor\.insertAdjacentElement\('afterend', block\)/);
-  assert.match(source, /document\.createElement\('csboard-lookup-actions'\)/);
-  assert.match(source, /block\.attachShadow\(\{ mode: 'open' \}\)/);
-  assert.match(source, /shadow\.innerHTML/);
+  assert.match(source, /MARKETPLACE_ACTIONS_CLASS = 'csboard-marketplace-actions-v119'/);
+  assert.match(source, /block\.className = MARKETPLACE_ACTIONS_CLASS/);
+  assert.doesNotMatch(source, /block\.className = 'csboard-lookup-inline'/);
+  assert.doesNotMatch(source, /attachShadow/);
+  assert.match(source, /querySelectorAll\('\.csboard-lookup-inline'\)/);
+  assert.doesNotMatch(
+    source,
+    /querySelectorAll\([^\n]*csboard-marketplace-actions-v119[^\n]*\)[^\n]*\.remove\(/,
+    'the 1.1.19 injector must update its live action row instead of deleting it during a click',
+  );
+  assert.match(source, /next\?\.classList\.contains\(MARKETPLACE_ACTIONS_CLASS\)/);
+  assert.match(source, /updateMarketplaceActionLinks\(block, item, itemName\)/);
+  assert.doesNotMatch(source, /Lookup on (?:BUFF|CSFloat|CSBOARD)/);
   assert.match(
     css,
-    /\.csboard-lookup-inline\s*{[^}]*pointer-events:\s*auto[^}]*z-index:\s*2147483000/s,
+    /\.csboard-marketplace-actions-v119\s*{[^}]*pointer-events:\s*auto[^}]*z-index:\s*2147483000/s,
   );
-  assert.match(css, /\.csboard-lookup-inline\s+a\s*{[^}]*pointer-events:\s*auto/s);
+  assert.match(
+    css,
+    /\.csboard-marketplace-action\s*{[^}]*width:\s*36px[^}]*height:\s*36px[^}]*pointer-events:\s*auto/s,
+  );
+  assert.match(source, /ariaLabel = 'Open on BUFF'/);
+  assert.match(source, /ariaLabel = 'Open on CSFloat'/);
+  assert.match(source, /ariaLabel = 'Open on CSBOARD'/);
 });
