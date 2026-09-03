@@ -153,33 +153,57 @@ export function parseTradeUrl(url: string): { partnerSteamId: string; partnerTok
 }
 
 /**
- * The exact body Steam wants for a one-item offer.
+ * The exact body Steam wants, for any number of items on either side.
  *
- * `json_tradeoffer` is Steam's own shape and is not ours to improve. `me` is
- * what WE give; `them` stays empty — this is a delivery, never a swap, and an
- * offer that asks for something back is a different transaction than the one
- * the buyer paid for.
+ * `json_tradeoffer` is Steam's own shape and is not ours to improve.
+ *
+ * Both sides are populated because two different products use this now:
+ *
+ *   P2P delivery  — we give one asset, we ask for nothing. `them` stays empty:
+ *                   the buyer already paid, and an offer that asks for
+ *                   something back is a different transaction than the one they
+ *                   paid for. Use `buildTradeOfferPayload`.
+ *   Обмен с доплатой — we give N assets and ask for the ONE copy the deal is
+ *                   about, with the cash leg settled on csboard afterwards.
+ *
+ * The asset lists still never come from a page. They come from the backend's
+ * send task, exactly as the single asset always did.
+ */
+export function buildTradeOfferBody(input: {
+  giveAssetIds: readonly string[];
+  receiveAssetIds?: readonly string[];
+  appId: number;
+  contextId: string;
+}): string {
+  const asset = (assetid: string) => ({
+    appid: input.appId,
+    contextid: input.contextId,
+    amount: 1,
+    assetid,
+  });
+  return JSON.stringify({
+    newversion: true,
+    version: 2,
+    me: { assets: input.giveAssetIds.map(asset), currency: [], ready: false },
+    them: { assets: (input.receiveAssetIds ?? []).map(asset), currency: [], ready: false },
+  });
+}
+
+/**
+ * The one-item delivery body, unchanged.
+ *
+ * Kept as its own function rather than folded into the call sites so the P2P
+ * path is byte-for-byte what it always was: it is live, it works, and widening
+ * a working payload builder is not the place to find that out.
  */
 export function buildTradeOfferPayload(input: {
   assetId: string;
   appId: number;
   contextId: string;
 }): string {
-  return JSON.stringify({
-    newversion: true,
-    version: 2,
-    me: {
-      assets: [
-        {
-          appid: input.appId,
-          contextid: input.contextId,
-          amount: 1,
-          assetid: input.assetId,
-        },
-      ],
-      currency: [],
-      ready: false,
-    },
-    them: { assets: [], currency: [], ready: false },
+  return buildTradeOfferBody({
+    giveAssetIds: [input.assetId],
+    appId: input.appId,
+    contextId: input.contextId,
   });
 }

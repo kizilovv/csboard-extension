@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.20
+
+- The site can ask us to send the trade for one **обмен с доплатой** — a deal
+  where the sender gives skins plus cash from their CSBoard balance for one
+  specific copy of a skin. The command is the narrowest kind this file allows:
+  the page names a DEAL id and nothing else, and the items on BOTH sides, the
+  recipient and their trade token are read by the background from CSBoard's own
+  record of that deal. A console on the page has nothing to substitute.
+- The offer builder now fills both halves of a Steam trade. Until now every
+  offer this extension created gave one item and asked for nothing, which is
+  right for a paid delivery and useless for a swap. The single-item delivery
+  body is unchanged, byte for byte — the P2P path is live and widening a
+  working payload builder is not the place to discover a mistake.
+- No tab flow for deals. The background POST is the only route: it needs no
+  pop-up, no page load and no content script, and every failure it can produce
+  is already a sentence the sender can act on. A failed send is retried with one
+  click inside the deal's 12-hour window.
+- No new permissions, and no new origins. The deal command rides the same
+  csboard-only allowlist as delivery and sync; CSFolder cannot reach it.
+- Nothing here decides anything about money. Reporting the Steam offer id only
+  starts the recipient's clock — the cash settles on CSBoard after Steam's
+  7-day hold and only once the skin is observed to have arrived.
+
 ## 1.1.16
 
 - The site can ask for a tracking pass NOW, so "I confirmed it in Steam Guard"

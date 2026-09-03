@@ -26,7 +26,7 @@
   background send fails with a Steam error that looks like a session problem.
 */
 
-import { buildTradeOfferPayload, type P2PTabSendResult } from './p2p-send-protocol';
+import { buildTradeOfferBody, type P2PTabSendResult } from './p2p-send-protocol';
 
 export const TRADE_SEND_URL = 'https://steamcommunity.com/tradeoffer/new/send';
 
@@ -59,7 +59,19 @@ export interface OfferPostInput {
   partnerSteamId: string;
   /** The `token` query parameter from the buyer's trade URL. */
   partnerToken: string;
-  assetId: string;
+  /**
+   * The single asset a P2P delivery gives. Kept as the primary field because
+   * that path is live and unchanged; a top-up deal passes `giveAssetIds`
+   * instead. Exactly one of the two must be present.
+   */
+  assetId?: string;
+  /** Everything WE put in, when there is more than one. */
+  giveAssetIds?: readonly string[];
+  /**
+   * What we ask for. Empty for a delivery — see buildTradeOfferBody — and
+   * exactly one copy for обмен с доплатой.
+   */
+  receiveAssetIds?: readonly string[];
   appId: number;
   contextId: string;
   message: string;
@@ -72,13 +84,22 @@ export interface OfferPostInput {
 }
 
 export async function postTradeOffer(input: OfferPostInput): Promise<P2PTabSendResult> {
+  const giveAssetIds = input.giveAssetIds ?? (input.assetId ? [input.assetId] : []);
+  if (giveAssetIds.length === 0) {
+    // Never reached from either caller — both read their assets off a backend
+    // send task that refuses to issue one without them. Guarded anyway because
+    // an empty `me.assets` is an offer that gives away nothing and asks for the
+    // partner's knife, which is the shape of a scam, not a bug we want to post.
+    return { ok: false, code: 'UNKNOWN', detail: 'no assets to give' };
+  }
   const body = new URLSearchParams({
     sessionid: input.sessionId,
     serverid: '1',
     partner: input.partnerSteamId,
     tradeoffermessage: input.message,
-    json_tradeoffer: buildTradeOfferPayload({
-      assetId: input.assetId,
+    json_tradeoffer: buildTradeOfferBody({
+      giveAssetIds,
+      receiveAssetIds: input.receiveAssetIds,
       appId: input.appId,
       contextId: input.contextId,
     }),
