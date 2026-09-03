@@ -2207,13 +2207,18 @@ async function runP2PTrackingPass(): Promise<void> {
       /*
         The completed-trade half, capped at the 100 rows the provider accepts.
 
-        It asked for 200. `readRecentTrades` rejects anything over 100 with
-        INVALID_PAYLOAD before it makes a single request, so this half threw on
-        EVERY pass and had never once run — which is why no trade history was
-        ever reported, and why the reversal detection that rides on it has been
-        blind. A hundred rows still covers the seven days that matter: how long
-        the buyer's skin sits in Steam's hold, and how long the seller can
-        still reverse the trade out of it.
+        It asked for 200 against a cap of 100, so `readRecentTrades` rejected it
+        with INVALID_PAYLOAD before making a single request: this half threw on
+        EVERY pass and had never once run. That is why no trade history was ever
+        reported and why the reversal detection riding on it has been blind —
+        measured on prod 2026-09-03, ONE of the 46 P2P orders taken in ten days
+        has a history row against it.
+
+        The cap is 250 now, which is what Steam serves and what CSFloat's
+        extension has asked for on a three-minute alarm all along. The window
+        this has to cover is Steam's seven-day protection period — the whole
+        time the buyer can still reverse the trade out of the hold — and on a
+        busy account a hundred rows is not seven days.
       */
       async () => {
         /*
@@ -2222,7 +2227,7 @@ async function runP2PTrackingPass(): Promise<void> {
           caller does not — it is hunting one trade among a hundred, and a bad
           neighbour taking the read down means a Steam rollback goes unseen.
         */
-        const result = await provider.readRecentTrades(100, { skipUnreadableRows: true });
+        const result = await provider.readRecentTrades(250, { skipUnreadableRows: true });
         return result.trades.map((trade) => ({
           tradeId: trade.tradeId,
           status: result.statuses[trade.tradeId] ?? 0,

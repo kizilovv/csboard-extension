@@ -758,7 +758,22 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     maxTrades = 100,
     options: SteamTradesReadOptions = {},
   ): Promise<SteamTradesReadResult> {
-    if (!Number.isSafeInteger(maxTrades) || maxTrades < 1 || maxTrades > 100) {
+    /*
+      250, not 100, and the ceiling is OURS rather than Steam's.
+
+      `GetTradeHistory` serves 250 happily — CSFloat's extension has asked for
+      exactly that on a three-minute alarm for as long as it has existed. Our
+      cap was 100 and the P2P tracker asked for 200, so `readRecentTrades` threw
+      INVALID_PAYLOAD before making a single request, on EVERY pass, and the
+      trade-history half of the tracker had never once run. That is why the
+      reversal detection built on it has been blind, and why exactly one of the
+      46 P2P orders taken in ten days has any history row against it.
+
+      The number matters beyond fixing the throw: a hundred rows is a busy
+      trader's afternoon, and the window this has to cover is Steam's seven-day
+      protection period — the whole time a buyer can still reverse the trade.
+    */
+    if (!Number.isSafeInteger(maxTrades) || maxTrades < 1 || maxTrades > 250) {
       throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.maxTrades' });
     }
     const cursor = options.cursor;
