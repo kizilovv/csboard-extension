@@ -222,7 +222,19 @@ async function reportHistory(sale: PendingSale, trade: HistoryTrade): Promise<vo
  */
 export async function trackP2PTrades(
   readOffers: () => Promise<ReadonlyArray<{ offerId: string; state: number; escrowEndAt?: number }>>,
-  readHistory?: () => Promise<ReadonlyArray<HistoryTrade>>,
+  /*
+    The history half is told WHAT IT IS LOOKING FOR, so the read can stop as
+    soon as it has found it.
+
+    `assetIds` are the copies these pending sales handed over, and `notBefore`
+    is the earliest instant any of them could have moved. A reader that knows
+    both can page until the answer is in hand instead of guessing a page size —
+    see the caller in `service-worker.ts`. A reader that ignores both is still
+    correct, just wasteful, which is what keeps this an optional argument.
+  */
+  readHistory?: (
+    want: { assetIds: readonly string[]; notBefore: number },
+  ) => Promise<ReadonlyArray<HistoryTrade>>,
 ): Promise<void> {
   const pending = await readPendingSales();
   // The pace follows the work — see `pacePeriodMinutes`. Done before the early
@@ -259,9 +271,32 @@ export async function trackP2PTrades(
     wrong match here would report someone else's trade against this order.
   */
   if (!readHistory) return;
+  /*
+    What the read has to cover, derived rather than assumed.
+
+    A sale's trade happened at most a protection window plus a margin before its
+    hold ends — `holdUntil` IS `tradableAt` plus an hour — so the oldest row
+    worth fetching is the earliest of those minus nine days. A sale with no hold
+    recorded has not been accepted yet, so its trade, if it exists at all, is
+    recent; the same nine days from now covers it with room to spare.
+
+    Nine, not seven: Steam's protection is seven days from the trade and our
+    hold is computed from a date Steam gives us, and neither is worth being
+    exact about when the cost of overshooting is one extra page.
+  */
+  const WINDOW_MS = 9 * 24 * 60 * 60_000;
+  const now = Date.now();
+  const wantedAssets = pending
+    .map((sale) => sale.assetId)
+    .filter((assetId): assetId is string => !!assetId);
+  const notBefore = pending.reduce(
+    (oldest, sale) => Math.min(oldest, (sale.holdUntil ?? now) - WINDOW_MS),
+    now,
+  );
+
   let history: ReadonlyArray<HistoryTrade>;
   try {
-    history = await readHistory();
+    history = await readHistory({ assetIds: wantedAssets, notBefore });
   } catch (error) {
     logger.warn('Could not read Steam trade history', { error: String(error) });
     return;

@@ -68,6 +68,21 @@ export interface SteamTradesReadOptions {
   readonly cursor?: SteamTradeHistoryCursor;
   readonly includeTotal?: boolean;
   /*
+    Ask Steam for the description table, or do without it.
+
+    ON by default, because portfolio sync is what this reader was written for
+    and a trade with no item names is not a portfolio record.
+
+    OFF is for the P2P tracker, which matches an order to a trade by ASSET ID
+    and never looks at a name. The table is most of the response — one page of
+    250 trades is a few hundred KB of icon hashes, localized tag names and
+    sticker HTML to answer "did asset 52186124273 move" — and every byte of it
+    crosses the extension's message boundary. `normalizeTradeItem` already
+    treats a missing description as "no name, no icon" rather than an error, so
+    dropping it costs the tracker nothing at all.
+  */
+  readonly getDescriptions?: boolean;
+  /*
     Skip a row this parser cannot read instead of failing the whole page.
 
     Off by default, because portfolio sync is a record of item movement and a
@@ -784,9 +799,10 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     )) {
       throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.tradeHistoryCursor' });
     }
+    const wantDescriptions = options.getDescriptions !== false;
     const response = await this.fetchSteamApi('GetTradeHistory', {
       max_trades: String(maxTrades),
-      get_descriptions: 'true',
+      get_descriptions: wantDescriptions ? 'true' : 'false',
       include_failed: 'false',
       include_total: options.includeTotal ? 'true' : 'false',
       language: 'english',

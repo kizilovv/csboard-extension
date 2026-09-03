@@ -2205,37 +2205,107 @@ async function runP2PTrackingPass(): Promise<void> {
         }));
       },
       /*
-        The completed-trade half, capped at the 100 rows the provider accepts.
+        The completed-trade half, PAGED with Steam's own cursor.
+
+        ── HOW IT USED TO FAIL ──────────────────────────────────────────────
 
         It asked for 200 against a cap of 100, so `readRecentTrades` rejected it
         with INVALID_PAYLOAD before making a single request: this half threw on
         EVERY pass and had never once run. That is why no trade history was ever
         reported and why the reversal detection riding on it has been blind —
         measured on prod 2026-09-03, ONE of the 46 P2P orders taken in ten days
-        has a history row against it.
+        had a history row against it.
 
-        The cap is 250 now, which is what Steam serves and what CSFloat's
-        extension has asked for on a three-minute alarm all along. The window
-        this has to cover is Steam's seven-day protection period — the whole
-        time the buyer can still reverse the trade out of the hold — and on a
-        busy account a hundred rows is not seven days.
+        ── WHY A FIXED PAGE SIZE IS THE WRONG SHAPE ─────────────────────────
+
+        Whatever number goes here is wrong for somebody. What this has to cover
+        is Steam's seven-day protection window — the whole time a buyer can
+        reverse the trade out of the hold — and a hundred rows is not seven days
+        on an account that trades all day. Raise it to be safe for them and every
+        seller with three sales pulls two hundred and fifty rows to find three.
+
+        `GetTradeHistory` takes a cursor (`start_after_time` +
+        `start_after_tradeid`) and says whether there is `more`, so the read can
+        be exactly as long as it needs to be: page until every watched asset has
+        been seen, or until the rows are older than the oldest sale could
+        possibly be, or until Steam says there is no more history. A seller with
+        three sales makes ONE request; a seller with three hundred keeps paging
+        until the answer is in hand.
+
+        No descriptions. The tracker matches an order to a trade by asset id and
+        never reads a name, and that table is most of the response — icon
+        hashes, localized tags and sticker HTML per item, on every row. It is
+        also the whole of "жирновато": one page of it is hundreds of kilobytes
+        crossing the extension's message boundary to answer "did asset
+        52186124273 move". `normalizeTradeItem` treats a missing description as
+        "no name, no icon" rather than an error, so this costs nothing.
+
+        Tolerant rows, deliberately: the parser is strict by default and throws
+        a whole page away over one malformed trade. Portfolio sync wants that;
+        this caller does not — a bad neighbour taking the read down means a
+        Steam rollback goes unseen.
       */
-      async () => {
-        /*
-          Tolerant rows: this parser is strict by default and throws the whole
-          page away over one malformed trade. Portfolio sync wants that; this
-          caller does not — it is hunting one trade among a hundred, and a bad
-          neighbour taking the read down means a Steam rollback goes unseen.
-        */
-        const result = await provider.readRecentTrades(250, { skipUnreadableRows: true });
-        return result.trades.map((trade) => ({
-          tradeId: trade.tradeId,
-          status: result.statuses[trade.tradeId] ?? 0,
-          givenAssetIds: trade.itemsGiven.map((item) => item.assetId),
-          receivedAssetIds: trade.itemsReceived.map((item) => item.assetId),
-          partnerSteamId: trade.partnerSteamId,
-          occurredAt: trade.occurredAt,
-        }));
+      async ({ assetIds, notBefore }) => {
+        /** One page. 250 is what Steam serves and what the reference asks for. */
+        const PAGE = 250;
+        /**
+         * A ceiling on paging, so a pathological account cannot spend the whole
+         * alarm here. Four pages is a thousand trades — far past seven days for
+         * anybody this has to work for — and stopping short only costs the rows
+         * the loop already has.
+         */
+        const MAX_PAGES = 4;
+
+        const wanted = new Set(assetIds);
+        const found = new Set<string>();
+        const rows: Array<{
+          tradeId: string;
+          status: number;
+          givenAssetIds: string[];
+          receivedAssetIds: string[];
+          partnerSteamId: string;
+          occurredAt: number;
+        }> = [];
+        let cursor: { startAfterTime: number; startAfterTradeId: string } | undefined;
+
+        for (let page = 0; page < MAX_PAGES; page += 1) {
+          const result = await provider.readRecentTrades(PAGE, {
+            skipUnreadableRows: true,
+            getDescriptions: false,
+            ...(cursor ? { cursor } : {}),
+          });
+          if (result.trades.length === 0) break;
+
+          for (const trade of result.trades) {
+            const given = trade.itemsGiven.map((item) => item.assetId);
+            const received = trade.itemsReceived.map((item) => item.assetId);
+            rows.push({
+              tradeId: trade.tradeId,
+              status: result.statuses[trade.tradeId] ?? 0,
+              givenAssetIds: given,
+              receivedAssetIds: received,
+              partnerSteamId: trade.partnerSteamId,
+              occurredAt: trade.occurredAt,
+            });
+            for (const assetId of given) if (wanted.has(assetId)) found.add(assetId);
+          }
+
+          // Everything we came for is in hand.
+          if (found.size >= wanted.size) break;
+          // Steam has no more history to give.
+          if (!result.hasMore) break;
+
+          const last = result.trades[result.trades.length - 1];
+          if (!last) break;
+          // Past the window any watched sale could live in. Older rows cannot
+          // be the delivery or the rollback of anything still in a hold.
+          if (last.occurredAt < notBefore) break;
+          // Steam's own cursor — a (time, tradeid) pair, not an offset, so a
+          // trade landing between requests cannot make the next page skip one.
+          cursor = { startAfterTime: Math.floor(last.occurredAt / 1000), startAfterTradeId: last.tradeId };
+        }
+
+        return rows;
       },
     );
 
