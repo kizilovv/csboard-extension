@@ -50,6 +50,17 @@ export const EXTERNAL_SEND_TRADE_MESSAGE_TYPE = 'P2P_SEND_TRADE' as const;
   watching, and a command with no fields is a command a page cannot steer.
 */
 export const EXTERNAL_TRACK_NOW_MESSAGE_TYPE = 'P2P_TRACK_NOW' as const;
+/*
+  Send the Steam trade for one обмен с доплатой.
+
+  The sibling of P2P_SEND_TRADE and just as narrow: the page names a DEAL and
+  nothing else. The items on both sides, the recipient and their trade token are
+  fetched by the background from csboard's record of that deal — see
+  topup-deal-send.ts. The difference from delivery is only that this offer is
+  two-sided; the authorisation model is identical, and the page still cannot
+  name a single asset.
+*/
+export const EXTERNAL_SEND_TOPUP_DEAL_MESSAGE_TYPE = 'TOPUP_SEND_DEAL' as const;
 export const EXTERNAL_SYNC_STATUS_MESSAGE_TYPE =
   'GET_PORTFOLIO_SYNC_STATUS' as const;
 const EXTERNAL_PROTOCOL_VERSION = 1 as const;
@@ -288,6 +299,14 @@ export interface ExternalSyncHandlers {
    * the outcome by re-reading its own order, never from this answer.
    */
   trackTradesNow(): Promise<void>;
+  /**
+   * Send the Steam trade for one обмен с доплатой, and report it to csboard.
+   *
+   * Takes a deal id and nothing else — see
+   * EXTERNAL_SEND_TOPUP_DEAL_MESSAGE_TYPE. Resolves with the Steam offer id, or
+   * a code naming what the sender has to fix.
+   */
+  sendTopUpDeal(dealId: string): Promise<ExternalSendTradeResult>;
 }
 
 /** What the delivery attempt tells the page. */
@@ -487,6 +506,9 @@ function allowedOriginsForExternalType(
     // to the pairing origins — CSFolder has no orders and no business sending
     // anybody's skins.
     case EXTERNAL_SEND_TRADE_MESSAGE_TYPE:
+    // A deal send is the same act against the same seller's own record, so it
+    // rides the same allowlist and is likewise closed to the pairing origins.
+    case EXTERNAL_SEND_TOPUP_DEAL_MESSAGE_TYPE:
     // Same allowlist again: asking us to look at Steam is strictly less than
     // asking us to send, and it is the same seller's own order either way.
     case EXTERNAL_TRACK_NOW_MESSAGE_TYPE:
@@ -652,6 +674,51 @@ export async function dispatchExternalMessage(
       them through the router's small error vocabulary would flatten all of them
       into one useless sentence.
     */
+    return {
+      version: 1,
+      requestId,
+      ok: true,
+      data: { sendFailed: true, code: outcome.code, detail: outcome.detail ?? null },
+    };
+  }
+
+  if (type === EXTERNAL_SEND_TOPUP_DEAL_MESSAGE_TYPE) {
+    /*
+      One field, checked exactly — the same rule as P2P_SEND_TRADE. The message
+      must be {version, type, requestId, payload:{dealId}} and nothing else; an
+      extra key is a page trying to smuggle in an asset or a recipient, and the
+      answer to that is refusal, not best-effort parsing.
+    */
+    const payload = (message as { payload?: unknown } | null)?.payload;
+    const dealId = (payload as { dealId?: unknown } | null)?.dealId;
+    const payloadKeys = payload && typeof payload === 'object' ? Object.keys(payload) : [];
+    if (requestId === null ||
+        typeof dealId !== 'string' ||
+        dealId.length === 0 ||
+        dealId.length > 64 ||
+        payloadKeys.length !== 1) {
+      return externalError(requestId, 'INVALID_MESSAGE');
+    }
+
+    let outcome: ExternalSendTradeResult;
+    try {
+      outcome = await options.syncHandlers.sendTopUpDeal(dealId);
+    } catch {
+      return externalError(requestId, 'SYNC_TRIGGER_FAILED');
+    }
+    if (outcome.ok) {
+      return {
+        version: 1,
+        requestId,
+        ok: true,
+        data: {
+          steamTradeOfferId: outcome.steamTradeOfferId,
+          needsMobileConfirmation: outcome.needsMobileConfirmation === true,
+        },
+      };
+    }
+    // The failure reaches the page as data, not as an error envelope: each code
+    // is a different thing for the sender to do, and the site phrases them.
     return {
       version: 1,
       requestId,

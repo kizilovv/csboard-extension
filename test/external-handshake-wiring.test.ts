@@ -29,7 +29,7 @@ test('service worker pins CSFolder activation and enables exactly two visible so
   assert.doesNotMatch(registration, /UNPAIR_DEVICE|steamLoginSecure|sessionid/);
 });
 
-test('CSBOARD gets exactly four sync commands, on its own origin list', () => {
+test('CSBOARD gets exactly five sync commands, on its own origin list', () => {
   // 1.1.5 said "CSBOARD retains a read-only status probe and nothing else".
   // 1.1.6 moved that line by exactly two commands so the site can ask for the
   // fresh inventory snapshot a listing needs. This test is the record of how
@@ -49,6 +49,16 @@ test('CSBOARD gets exactly four sync commands, on its own origin list', () => {
   // seller waits on an alarm, and a site that still says "send it" while he has
   // already sent it is how duplicate offers get created.
   //
+  // 2026-09-01 moved it by one more: `sendTopUpDeal`. It is the same act as
+  // `sendTradeForOrder` against the same seller's own record — the page names a
+  // DEAL id and nothing else, and the items on both sides, the recipient and
+  // their trade token are read from csboard's record of that deal. The only
+  // thing that differs is that the offer is two-sided: обмен с доплатой gives
+  // the sender's pile and asks for the one copy the recipient accepted with,
+  // with the cash settled on csboard after Steam's hold. It exists for the same
+  // reason delivery does — the alternative is Steam's own trade window, where
+  // the sender assembles the offer by hand and can put a different skin in it.
+  //
   // Still NOT here, and each absence is deliberate: no pairing, no credential
   // read, no way to get Steam data back out to the page. CSFolder's origins are
   // not on this list either — it has no orders and no business delivering
@@ -66,10 +76,11 @@ test('CSBOARD gets exactly four sync commands, on its own origin list', () => {
   assert.match(syncHandlers, /readSyncStatus:\s*readExternalSyncStatus/);
   assert.match(syncHandlers, /sendTradeForOrder:/);
   assert.match(syncHandlers, /trackTradesNow:/);
+  assert.match(syncHandlers, /sendTopUpDeal:/);
   assert.equal(
     syncHandlers.split('\n').filter((line) => /^\s*\w+:/.test(line)).length,
-    4,
-    'the site may trigger a sync, read its state, deliver a paid order, and ask us to look at Steam — nothing else',
+    5,
+    'the site may trigger a sync, read its state, deliver a paid order, send a top-up deal, and ask us to look at Steam — nothing else',
   );
 
   // 1.1.7 moved the line again, and only in one place: an install that is not

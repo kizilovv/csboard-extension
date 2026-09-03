@@ -7,6 +7,7 @@
 
 import { getApiBase, SITE_BASE } from '../shared/config';
 import { sendP2PTradeForOrder } from './p2p-trade-send';
+import { sendTopUpDealTrade } from './topup-deal-send';
 import {
   catchUpP2PTracking,
   P2P_TRACK_ALARM,
@@ -1541,6 +1542,10 @@ registerExternalStatusRouter({
     // "I confirmed it in Guard" — look at Steam now rather than at the next
     // alarm. Same pass the schedule runs; see EXTERNAL_TRACK_NOW_MESSAGE_TYPE.
     trackTradesNow: () => runP2PTrackingPass(),
+    // Обмен с доплатой. Takes a deal id from the page and reads the items, the
+    // recipient and their token off csboard's record of that deal — see
+    // topup-deal-send.ts for why the page is not trusted with any of it.
+    sendTopUpDeal: (dealId: string) => sendTopUpDealTrade(dealId),
   },
   handlers: {
     async isPaired() {
