@@ -20,7 +20,7 @@ import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { readSteamPageCredential } from '../../shared/steam-page-credential';
 import { sendMessageIfContextAlive } from '../../shared/message-bus';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('trade-offers-list');
 
@@ -835,7 +835,7 @@ function init() {
 const bootstrap = () => { init(); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('steam', bootstrap);
 }

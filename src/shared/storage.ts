@@ -213,6 +213,37 @@ const migrations: Migration[] = [
       });
     },
   },
+  {
+    version: 4,
+    up: async () => {
+      /*
+        The master switch became three per-site switches.
+
+        A profile that had the master OFF must stay dark: folding it into the
+        three site flags here is the only chance to carry that intent over,
+        because the popup no longer draws a control that could restore it. The
+        master itself is left ON afterwards and stays a plain AND, so nothing
+        that still reads it changes behaviour.
+      */
+      const current = await storageGet(STORAGE_KEYS.SETTINGS);
+      const wasMuted = current?.enhancementsEnabled === false;
+
+      await storageSet(STORAGE_KEYS.SETTINGS, {
+        ...DEFAULT_SETTINGS,
+        ...current,
+        enhancementsEnabled: true,
+        showOnSteam: wasMuted ? false : current?.showOnSteam ?? true,
+        showCsboardPricesOnCsfloat: wasMuted
+          ? false
+          : current?.showCsboardPricesOnCsfloat ?? true,
+        showBetterBuffOnBuff: wasMuted ? false : current?.showBetterBuffOnBuff ?? false,
+        portfolioSources: {
+          ...DEFAULT_SETTINGS.portfolioSources,
+          ...(current?.portfolioSources ?? {}),
+        },
+      });
+    },
+  },
 ];
 
 /**

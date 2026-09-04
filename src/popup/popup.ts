@@ -6,6 +6,18 @@
 // be forwarded by onMessageExternal.
 
 import { SITE_BASE } from '../shared/config';
+import {
+  applyTranslations,
+  initI18n,
+  isMessageKey,
+  normalizeLocalePreference,
+  resolveLocale,
+  activateLocale,
+  loadLocalePreference,
+  saveLocalePreference,
+  t,
+  type LocalePreference,
+} from '../shared/i18n';
 import { sendTypedMessage } from '../shared/message-bus';
 import { normalizeAvatarUrl, type UserProfile } from '../shared/types';
 import {
@@ -60,6 +72,14 @@ const PORTFOLIO_RUN_STATES = new Set<PortfolioSourceRunState>([
   'disabled',
 ]);
 
+type AuthState =
+  | { kind: 'checking' }
+  | { kind: 'signed-in'; user: UserProfile }
+  | { kind: 'signed-out' }
+  | { kind: 'offline' };
+
+let authState: AuthState = { kind: 'checking' };
+let localePreference: LocalePreference = 'auto';
 let settings: PopupSettingsV2 = DEFAULT_POPUP_SETTINGS;
 let preferenceSync: PricePreferenceSyncStatus = {
   state: 'idle',
@@ -159,6 +179,9 @@ function normalizeSettings(value: unknown, fallback: PopupSettingsV2): PopupSett
     followCsboardSettings: typeof value.followCsboardSettings === 'boolean'
       ? value.followCsboardSettings
       : fallback.followCsboardSettings,
+    showOnSteam: typeof value.showOnSteam === 'boolean'
+      ? value.showOnSteam
+      : fallback.showOnSteam,
     showCsboardPricesOnCsfloat: typeof value.showCsboardPricesOnCsfloat === 'boolean'
       ? value.showCsboardPricesOnCsfloat
       : fallback.showCsboardPricesOnCsfloat,
@@ -291,31 +314,28 @@ function showNotice(message: string, kind: NoticeKind = 'info'): void {
   }
 }
 
+/*
+  Codes arrive from the background already sanitized, and are shown, not parsed.
+
+  A code with a translation gets the sentence; anything else is de-cased into
+  something readable rather than dropped, because an untranslated cause still
+  tells a user more than silence does.
+*/
 function humanizeCode(code: string): string {
   const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '').toUpperCase();
-  const exactCopy: Readonly<Record<string, string>> = {
-    STEAM_SESSION_REQUIRED: 'sign in to Steam or open a signed-in Steam tab',
-    STEAM_ACCOUNT_MISMATCH: 'active Steam account does not match the paired account',
-    STEAM_RATE_LIMITED: 'Steam rate limit reached; retry later',
-    STEAM_UNAVAILABLE: 'Steam is temporarily unavailable',
-    STEAM_RESPONSE_INVALID: 'Steam returned an unsupported response',
-    STEAM_READ_FAILED: 'Steam read failed',
-    TRADE_HISTORY_TRUNCATED: 'trade history partially synced; newest records only',
-  };
-  return exactCopy[safeCode] ?? safeCode
-    .replace(/[^A-Za-z0-9_-]/g, '')
-    .replace(/[_-]+/g, ' ')
-    .toLowerCase();
+  const key = `code.${safeCode}`;
+  if (isMessageKey(key)) return t(key);
+  return safeCode.replace(/[_-]+/g, ' ').toLowerCase();
 }
 
 function timeAgo(timestamp: number | null): string {
-  if (!timestamp) return 'Never';
+  if (!timestamp) return t('time.never');
   const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1_000));
-  if (seconds < 15) return 'Just now';
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
+  if (seconds < 15) return t('time.now');
+  if (seconds < 60) return t('time.seconds', { n: seconds });
+  if (seconds < 3_600) return t('time.minutes', { n: Math.floor(seconds / 60) });
+  if (seconds < 86_400) return t('time.hours', { n: Math.floor(seconds / 3_600) });
+  return t('time.days', { n: Math.floor(seconds / 86_400) });
 }
 
 function setConnection(state: 'online' | 'signed-out' | 'offline', label: string): void {
@@ -367,21 +387,54 @@ export function renderUserAvatar(user: Pick<UserProfile, 'name' | 'avatar'>): vo
   avatar.src = safeUrl;
 }
 
+/*
+  The account row is one line: avatar, name, badge, button.
+
+  The paragraph that used to sit under it restated the connection pill in a
+  sentence ("Connected. CSBOARD preferences can be followed automatically."),
+  and the two never disagreed. The pill says the state; the name says whose.
+*/
 function renderAuthenticatedUser(user: UserProfile): void {
-  setHidden('#auth-user', false);
-  renderUserAvatar(user);
-  setText('#user-name', user.name);
-  setHidden('#user-badge', !user.isPremium);
-  setText('#auth-detail', 'Connected. CSBOARD preferences can be followed automatically.');
-  setConnection('online', 'Connected');
+  authState = { kind: 'signed-in', user };
+  renderAuth();
+}
+
+function renderAuth(): void {
+  const loginButton = element<HTMLAnchorElement>('#login-btn');
+  const avatarFallback = element<HTMLElement>('#user-avatar-fallback');
+
+  if (authState.kind === 'signed-in') {
+    renderUserAvatar(authState.user);
+    setText('#user-name', authState.user.name);
+    setHidden('#user-badge', !authState.user.isPremium);
+    loginButton.textContent = t('account.open');
+    setConnection('online', t('status.connected'));
+    return;
+  }
+
+  setHidden('#user-avatar', true);
+  setHidden('#user-avatar-fallback', false);
+  avatarFallback.textContent = '?';
+  setHidden('#user-badge', true);
+  loginButton.textContent = authState.kind === 'signed-out'
+    ? t('account.signIn')
+    : t('account.open');
+
+  if (authState.kind === 'offline') {
+    setText('#user-name', t('account.offline'));
+    setConnection('offline', t('status.offline'));
+    return;
+  }
+
+  setText('#user-name', t('account.signedOut'));
+  setConnection('signed-out', t('status.signedOut'));
 }
 
 async function checkAuth(): Promise<void> {
   const result = await sendTypedMessage({ type: 'GET_AUTH_STATUS' });
   if (!result.ok) {
-    setHidden('#auth-user', true);
-    setText('#auth-detail', 'CSBOARD is unreachable. Your last valid local settings are unchanged.');
-    setConnection('offline', 'Offline');
+    authState = { kind: 'offline' };
+    renderAuth();
     return;
   }
 
@@ -390,74 +443,67 @@ async function checkAuth(): Promise<void> {
     return;
   }
 
-  setHidden('#auth-user', true);
-  setText('#auth-detail', 'Signed out. Local price and overlay settings remain available.');
-  setConnection('signed-out', 'Signed out');
+  authState = { kind: 'signed-out' };
+  renderAuth();
 }
 
 function preferenceSyncDescription(): string {
-  if (!settingsContractAvailable) return 'Settings controller unavailable in this build.';
-  if (!settings.followCsboardSettings) return 'Off — local currency and source will not be overwritten.';
-
-  const lastSync = preferenceSync.lastSyncedAt
-    ? ` Last synced ${timeAgo(preferenceSync.lastSyncedAt)}.`
-    : '';
+  if (!settingsContractAvailable) return t('sync.unavailable');
+  if (!settings.followCsboardSettings) return t('sync.off');
 
   switch (preferenceSync.state) {
     case 'syncing':
-      return 'Syncing from CSBOARD…';
-    case 'success':
-      return `Following CSBOARD.${lastSync}`;
+      return t('sync.syncing');
     case 'warning':
-      return `Following CSBOARD with warning${preferenceSync.warningCode ? `: ${humanizeCode(preferenceSync.warningCode)}` : '.'}${lastSync}`;
+      return t('sync.warning', {
+        code: preferenceSync.warningCode ? humanizeCode(preferenceSync.warningCode) : '—',
+      });
     case 'error':
-      return `Sync failed; last valid values were kept.${lastSync}`;
+      return t('sync.error');
     case 'signed_out':
-      return 'Sign in to CSBOARD to import preferences. Last valid values are kept.';
+      return t('sync.signedOut');
+    case 'success':
     case 'idle':
-      return `Following CSBOARD.${lastSync}`;
+      return preferenceSync.lastSyncedAt
+        ? t('sync.followingAgo', { ago: timeAgo(preferenceSync.lastSyncedAt) })
+        : t('sync.following');
   }
 }
+
+const SITE_TOGGLES = [
+  { selector: '#steam-overlay-toggle', key: 'showOnSteam' },
+  { selector: '#csfloat-overlay-toggle', key: 'showCsboardPricesOnCsfloat' },
+  { selector: '#betterbuff-toggle', key: 'showBetterBuffOnBuff' },
+] as const satisfies ReadonlyArray<{
+  selector: string;
+  key: 'showOnSteam' | 'showCsboardPricesOnCsfloat' | 'showBetterBuffOnBuff';
+}>;
 
 function renderSettings(): void {
   const currency = element<HTMLSelectElement>('#currency-select');
   const priceSource = element<HTMLSelectElement>('#price-source-select');
-  const enhancements = element<HTMLInputElement>('#enhancements-toggle');
   const salesNotifications = element<HTMLInputElement>('#sales-notifications-toggle');
   const follow = element<HTMLInputElement>('#sync-preferences-toggle');
-  const showCsfloat = element<HTMLInputElement>('#csfloat-overlay-toggle');
-  const showBetterBuff = element<HTMLInputElement>('#betterbuff-toggle');
   const syncButton = element<HTMLButtonElement>('#sync-preferences-btn');
+  const unavailableOrBusy = !settingsContractAvailable || settingsBusy;
 
   currency.value = settings.currency;
   priceSource.value = settings.priceSource;
-  enhancements.checked = settings.enhancementsEnabled;
   salesNotifications.checked = settings.salesNotifications;
   follow.checked = settings.followCsboardSettings;
-  showCsfloat.checked = settings.showCsboardPricesOnCsfloat;
-  showBetterBuff.checked = settings.showBetterBuffOnBuff;
 
-  const unavailableOrBusy = !settingsContractAvailable || settingsBusy;
+  for (const { selector, key } of SITE_TOGGLES) {
+    const toggle = element<HTMLInputElement>(selector);
+    toggle.checked = settings[key];
+    toggle.disabled = unavailableOrBusy;
+  }
+
   currency.disabled = unavailableOrBusy || settings.followCsboardSettings;
   priceSource.disabled = unavailableOrBusy || settings.followCsboardSettings;
-  enhancements.disabled = unavailableOrBusy;
   salesNotifications.disabled = unavailableOrBusy;
   follow.disabled = unavailableOrBusy;
-  showCsfloat.disabled = unavailableOrBusy;
-  showBetterBuff.disabled = unavailableOrBusy;
   syncButton.disabled = unavailableOrBusy || !settings.followCsboardSettings;
   setText('#preference-sync-status', preferenceSyncDescription());
-  /*
-    Say what stays running. "Off" on a trading extension reads as "does
-    nothing", and a seller who concluded that and stopped watching his sales
-    would be wrong in the one way that costs him a skin.
-  */
-  setText(
-    '#enhancements-status',
-    settings.enhancementsEnabled
-      ? 'Prices, floats and links on Steam, CSFloat and Buff.'
-      : 'Off — nothing is drawn on any site. Sale delivery still works.',
-  );
 }
 
 async function loadSettings(): Promise<void> {
@@ -520,7 +566,7 @@ async function updateSettings(
     return true;
   } catch {
     settings = previous;
-    showNotice('Could not save this setting. Your previous value was restored.', 'error');
+    showNotice(t('notice.saveFailed'), 'error');
     return false;
   } finally {
     settingsBusy = false;
@@ -535,45 +581,49 @@ async function syncPreferencesNow(): Promise<void> {
   renderSettings();
   const saved = await updateSettings({}, {
     syncFromCsboardNow: true,
-    successMessage: 'CSBOARD price preferences synced.',
+    successMessage: t('notice.prefsSynced'),
   });
   if (!saved) preferenceSync = { ...previousSync, state: 'error' };
   renderSettings();
 }
 
 function sourceStatusText(source: PortfolioSource): string {
-  if (source === 'marketHistory') return 'Not available in 1.1';
-  if (!settings.portfolioSources[source]) return 'Off';
+  if (source === 'marketHistory') return t('portfolio.src.unavailable');
+  if (!settings.portfolioSources[source]) return t('portfolio.src.off');
   const status = portfolioStatus.sources[source];
-  const count = status.records !== undefined ? ` · ${status.records.toLocaleString()} records` : '';
+  const count = status.records !== undefined ? ` · ${status.records.toLocaleString()}` : '';
 
   switch (status.state) {
-    case 'queued': return `Queued${count}`;
-    case 'running': return `Syncing${count}`;
-    case 'success': return `Synced${count}${status.warningCode
+    case 'queued': return `${t('portfolio.src.queued')}${count}`;
+    case 'running': return `${t('portfolio.src.running')}${count}`;
+    case 'success': return `${t('portfolio.src.synced')}${count}${status.warningCode
       ? ` · ${humanizeCode(status.warningCode)}`
       : ''}`;
-    case 'error': return `Error${status.errorCode ? ` · ${humanizeCode(status.errorCode)}` : ''}`;
-    case 'disabled': return 'Enabled for manual and hourly sync';
-    case 'idle': return `Ready${count}`;
+    case 'error': return `${t('portfolio.src.error')}${status.errorCode ? ` · ${humanizeCode(status.errorCode)}` : ''}`;
+    // The source is switched on but the scheduler has not reached it yet: it
+    // will go with the next manual or hourly run.
+    case 'disabled': return t('portfolio.src.on');
+    case 'idle': return `${t('portfolio.src.ready')}${count}`;
   }
 }
 
 function portfolioSummary(): string {
-  if (!portfolioContractAvailable) return 'Portfolio sync is unavailable in this build. No data is uploaded.';
+  if (!portfolioContractAvailable) return t('portfolio.state.unavailable');
   switch (portfolioStatus.connectionState) {
     case 'unpaired':
-      return 'Pair with a one-time code from CSFolder. Installing the extension never enables uploads.';
+      return t('portfolio.state.unpaired');
     case 'paired':
-      if (!settings.portfolioSyncEnabled) return 'Paired. Portfolio uploads remain off until you enable them.';
-      if (portfolioStatus.paused) return 'Sync is paused by the connector. Review the status and retry manually.';
-      return 'Paired. Enabled sources sync automatically about once per hour; Sync now runs them immediately.';
+      if (!settings.portfolioSyncEnabled) return t('portfolio.state.pairedOff');
+      if (portfolioStatus.paused) return t('portfolio.state.paused');
+      return t('portfolio.state.pairedOn');
     case 'revoked':
-      return 'This device was revoked. Unpair it locally, then create a new one-time code.';
+      return t('portfolio.state.revoked');
     case 'mismatch':
-      return 'The active Steam account does not match the paired account. Sync is blocked.';
+      return t('portfolio.state.mismatch');
     case 'error':
-      return `Portfolio connection error${portfolioStatus.errorCode ? `: ${humanizeCode(portfolioStatus.errorCode)}` : '.'}`;
+      return t('portfolio.state.error', {
+        code: portfolioStatus.errorCode ? humanizeCode(portfolioStatus.errorCode) : '—',
+      });
   }
 }
 
@@ -588,18 +638,21 @@ function renderPortfolio(): void {
 
   badge.classList.remove('neutral', 'good', 'warn', 'bad');
   if (!portfolioContractAvailable) {
-    badge.textContent = 'Unavailable';
+    badge.textContent = t('portfolio.badge.unavailable');
     badge.classList.add('neutral');
   } else {
     const badgeConfig = {
-      unpaired: ['Unpaired', 'neutral'],
-      paired: [settings.portfolioSyncEnabled ? 'Enabled' : 'Paired', settings.portfolioSyncEnabled ? 'good' : 'neutral'],
-      revoked: ['Revoked', 'bad'],
-      mismatch: ['Mismatch', 'bad'],
-      error: ['Error', 'bad'],
+      unpaired: ['portfolio.badge.unpaired', 'neutral'],
+      paired: [
+        settings.portfolioSyncEnabled ? 'portfolio.badge.enabled' : 'portfolio.badge.paired',
+        settings.portfolioSyncEnabled ? 'good' : 'neutral',
+      ],
+      revoked: ['portfolio.badge.revoked', 'bad'],
+      mismatch: ['portfolio.badge.mismatch', 'bad'],
+      error: ['portfolio.badge.error', 'bad'],
     } as const;
-    const [label, className] = badgeConfig[portfolioStatus.connectionState];
-    badge.textContent = label;
+    const [labelKey, className] = badgeConfig[portfolioStatus.connectionState];
+    badge.textContent = t(labelKey);
     badge.classList.add(className);
   }
 
@@ -608,7 +661,7 @@ function renderPortfolio(): void {
   setHidden('#portfolio-enable-row', !portfolioContractAvailable || !paired);
   setHidden('#portfolio-account', !portfolioStatus.steamId);
   if (portfolioStatus.steamId) {
-    setText('#portfolio-account', `Paired Steam ID: ${portfolioStatus.steamId}`);
+    setText('#portfolio-account', t('portfolio.steamId', { id: portfolioStatus.steamId }));
   }
 
   portfolioToggle.checked = settings.portfolioSyncEnabled;
@@ -625,14 +678,15 @@ function renderPortfolio(): void {
   setHidden('#portfolio-metrics', !showMetrics);
   setText('#portfolio-last-success', timeAgo(portfolioStatus.lastSuccessfulAt));
   setText('#portfolio-last-attempt', timeAgo(portfolioStatus.lastAttemptedAt));
-  setText('#portfolio-queued', `${portfolioStatus.queuedRecords.toLocaleString()} records`);
+  setText('#portfolio-queued', portfolioStatus.queuedRecords.toLocaleString());
 
   setHidden('#portfolio-actions', !portfolioContractAvailable || !hasPairing);
   setHidden('#sync-portfolio-btn', !paired);
   syncButton.disabled = portfolioBusy
     || !settings.portfolioSyncEnabled
     || !Object.values(settings.portfolioSources).some(Boolean);
-  syncButton.textContent = portfolioBusy ? 'Syncing…' : 'Sync now';
+  syncButton.textContent = portfolioBusy ? t('portfolio.syncing') : t('portfolio.syncNow');
+  unpairButton.textContent = t('portfolio.unpair');
   unpairButton.disabled = portfolioBusy;
 }
 
@@ -663,7 +717,7 @@ async function loadPortfolioStatus(): Promise<void> {
 */
 
 async function unpairDevice(): Promise<void> {
-  const confirmed = window.confirm('Unpair this browser from CSFolder? Pending local sync data will no longer upload.');
+  const confirmed = window.confirm(t('portfolio.unpairConfirm'));
   if (!confirmed) return;
 
   portfolioBusy = true;
@@ -683,9 +737,9 @@ async function unpairDevice(): Promise<void> {
       portfolioSyncEnabled: false,
       portfolioSources: { ...DEFAULT_POPUP_SETTINGS.portfolioSources },
     };
-    showNotice('Device unpaired and portfolio uploads disabled.', 'success');
+    showNotice(t('notice.unpaired'), 'success');
   } catch {
-    showNotice('Could not unpair this device. Nothing was deleted locally.', 'error');
+    showNotice(t('notice.unpairFailed'), 'error');
   } finally {
     portfolioBusy = false;
     renderSettings();
@@ -712,16 +766,16 @@ async function runManualSync(): Promise<void> {
       .filter((source) => source.enabled && source.warningCode);
     const warningCodes = new Set(warnedSources.map((source) => source.warningCode));
     const warningMessage = warningCodes.has('TRADE_HISTORY_TRUNCATED')
-      ? 'Trade History was partially synced. The newest records were uploaded; older records were not included in this run.'
+      ? t('notice.syncTruncated')
       : warningCodes.has('OVERSIZED_RECORDS_DROPPED')
-        ? 'Sync finished safely, but one or more oversized records were omitted.'
-        : 'Sync finished safely with a source warning. Review the source status for details.';
+        ? t('notice.syncOversized')
+        : t('notice.syncWarning');
     showNotice(
       skippedSources.length > 0
-        ? 'Sync finished, but one or more Steam sources were unavailable. Successful sources were uploaded safely.'
+        ? t('notice.syncPartial')
         : warnedSources.length > 0
           ? warningMessage
-          : 'Manual portfolio sync finished.',
+          : t('notice.syncDone'),
       skippedSources.length > 0 || warnedSources.length > 0 ? 'warning' : 'success',
     );
   } catch (error) {
@@ -735,10 +789,7 @@ async function runManualSync(): Promise<void> {
     } catch {
       cause = error instanceof Error && error.message ? ` (${error.message})` : '';
     }
-    showNotice(
-      `Portfolio sync did not finish${cause}. Safe queued records will retry without duplication.`,
-      'error',
-    );
+    showNotice(t('notice.syncFailed', { cause }), 'error');
   } finally {
     portfolioBusy = false;
     renderPortfolio();
@@ -749,30 +800,41 @@ async function refreshPrices(): Promise<void> {
   const button = element<HTMLButtonElement>('#refresh-prices-btn');
   clearNotice();
   button.disabled = true;
-  button.textContent = 'Refreshing…';
+  button.textContent = t('prices.refreshing');
 
   const result = await sendTypedMessage({ type: 'REFRESH_PRICES' }, 30_000);
   if (result.ok && result.value.success) {
-    showNotice(`Loaded ${result.value.count.toLocaleString()} price rows.`, 'success');
+    showNotice(t('notice.pricesLoaded', { count: result.value.count.toLocaleString() }), 'success');
     await loadPriceStatus();
   } else {
-    showNotice('Price refresh failed. Existing cached prices were kept.', 'error');
+    showNotice(t('notice.pricesFailed'), 'error');
   }
   button.disabled = false;
-  button.textContent = 'Refresh';
+  button.textContent = t('prices.refresh');
+}
+
+let priceStatus: { count: number; lastFetched: number | null } | null = null;
+
+function renderPriceStatus(): void {
+  if (!priceStatus) {
+    setText('#prices-count', t('prices.cacheUnknown'));
+    setText('#prices-updated', '');
+    return;
+  }
+  setText('#prices-count', priceStatus.count > 0
+    ? t('prices.cache', { count: priceStatus.count.toLocaleString() })
+    : t('prices.cacheEmpty'));
+  setText('#prices-updated', priceStatus.lastFetched
+    ? t('prices.updated', { ago: timeAgo(priceStatus.lastFetched) })
+    : t('prices.updatedNever'));
 }
 
 async function loadPriceStatus(): Promise<void> {
   const result = await sendTypedMessage({ type: 'GET_PRICE_ENGINE_STATUS' });
-  if (!result.ok) {
-    setText('#prices-count', 'Price data: —');
-    setText('#prices-updated', 'Cache status unavailable');
-    return;
-  }
-  setText('#prices-count', `Price data: ${result.value.count.toLocaleString()}`);
-  setText('#prices-updated', result.value.lastFetched
-    ? `Updated ${timeAgo(result.value.lastFetched)}`
-    : 'Never fetched');
+  priceStatus = result.ok
+    ? { count: result.value.count, lastFetched: result.value.lastFetched }
+    : null;
+  renderPriceStatus();
 }
 
 function bindEvents(): void {
@@ -790,24 +852,42 @@ function bindEvents(): void {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     void updateSettings(
       { salesNotifications: enabled },
-      {
-        successMessage: enabled
-          ? 'You will be notified when a sale needs you.'
-          : 'Sale notifications off. The icon still shows the count.',
-      },
+      { successMessage: enabled ? t('notice.notifyOn') : t('notice.notifyOff') },
     );
   });
 
-  element<HTMLInputElement>('#enhancements-toggle').addEventListener('change', (event) => {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    void updateSettings(
-      { enhancementsEnabled: enabled },
-      {
-        successMessage: enabled
-          ? 'Enabled. Reload an open tab to see it.'
-          : 'Disabled. Reload an open tab to clear it.',
-      },
-    );
+  /*
+    One message for all three sites, in both directions.
+
+    The four separate sentences this replaced ("CSFloat overlay enabled.",
+    "BetterBuff tools disabled on Buff163.", …) told the user what he had just
+    clicked. What he cannot see is that the tab already open does not change
+    until it reloads, so that is the only thing worth a notice.
+  */
+  for (const { selector, key } of SITE_TOGGLES) {
+    element<HTMLInputElement>(selector).addEventListener('change', (event) => {
+      const enabled = (event.currentTarget as HTMLInputElement).checked;
+      void updateSettings(
+        { [key]: enabled },
+        { successMessage: t('notice.reloadTab') },
+      );
+    });
+  }
+
+  /*
+    Language is a popup preference, not an extension setting.
+
+    It never leaves this browser and nothing in the background reads it, so it
+    lives under its own storage key rather than in the settings contract the
+    service worker validates and csboard can sync.
+  */
+  element<HTMLSelectElement>('#language-select').addEventListener('change', (event) => {
+    const preference = normalizeLocalePreference((event.currentTarget as HTMLSelectElement).value);
+    localePreference = preference;
+    activateLocale(resolveLocale(preference));
+    applyTranslations();
+    renderAll();
+    void saveLocalePreference(preference);
   });
 
   element<HTMLInputElement>('#sync-preferences-toggle').addEventListener('change', (event) => {
@@ -816,26 +896,6 @@ function bindEvents(): void {
       const saved = await updateSettings({ followCsboardSettings: enabled });
       if (saved && enabled) await syncPreferencesNow();
     })();
-  });
-
-  element<HTMLInputElement>('#csfloat-overlay-toggle').addEventListener('change', (event) => {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    void updateSettings(
-      { showCsboardPricesOnCsfloat: enabled },
-      { successMessage: enabled ? 'CSFloat overlay enabled.' : 'CSFloat overlay disabled.' },
-    );
-  });
-
-  element<HTMLInputElement>('#betterbuff-toggle').addEventListener('change', (event) => {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    void updateSettings(
-      { showBetterBuffOnBuff: enabled },
-      {
-        successMessage: enabled
-          ? 'BetterBuff tools enabled on Buff163.'
-          : 'BetterBuff tools disabled on Buff163.',
-      },
-    );
   });
 
   element<HTMLButtonElement>('#sync-preferences-btn').addEventListener('click', () => {
@@ -847,7 +907,7 @@ function bindEvents(): void {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     void updateSettings(
       { portfolioSyncEnabled: enabled },
-      { successMessage: enabled ? 'Portfolio uploads enabled.' : 'Portfolio uploads paused.' },
+      { successMessage: enabled ? t('notice.uploadsOn') : t('notice.uploadsOff') },
     );
   });
 
@@ -874,12 +934,33 @@ function bindEvents(): void {
   });
 }
 
+/** Every panel that holds translated text, re-run when the locale changes. */
+function renderAll(): void {
+  renderAuth();
+  renderSettings();
+  renderPortfolio();
+  renderPriceStatus();
+}
+
 async function init(): Promise<void> {
   const loginButton = element<HTMLAnchorElement>('#login-btn');
   loginButton.href = SITE_BASE;
+
+  /*
+    Translate before the first paint, then again after each load resolves.
+
+    `initI18n` is awaited here rather than raced with the data loads: it reads
+    one local storage key, and a popup that renders English for 30ms and then
+    swaps to Russian in front of the user looks broken in a way the saved
+    round-trip does not pay for.
+  */
+  localePreference = await loadLocalePreference();
+  await initI18n();
+  element<HTMLSelectElement>('#language-select').value = localePreference;
+  applyTranslations();
+
   bindEvents();
-  renderSettings();
-  renderPortfolio();
+  renderAll();
 
   await Promise.allSettled([
     checkAuth(),

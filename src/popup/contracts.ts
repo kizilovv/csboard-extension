@@ -56,6 +56,8 @@ export interface PopupSettingsV2 {
   /** Desktop notification when a sale needs the seller. */
   readonly salesNotifications: boolean;
   readonly followCsboardSettings: boolean;
+  /** Per-site draw switches. The popup shows exactly these three. */
+  readonly showOnSteam: boolean;
   readonly showCsboardPricesOnCsfloat: boolean;
   readonly showBetterBuffOnBuff: boolean;
   readonly portfolioSyncEnabled: boolean;
@@ -85,6 +87,7 @@ export const DEFAULT_POPUP_SETTINGS: PopupSettingsV2 = {
   enhancementsEnabled: true,
   salesNotifications: true,
   followCsboardSettings: true,
+  showOnSteam: true,
   showCsboardPricesOnCsfloat: true,
   showBetterBuffOnBuff: false,
   // Portfolio upload is a separate, explicit opt-in and is never enabled by

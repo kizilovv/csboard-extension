@@ -15,7 +15,7 @@
 import { priceEngine, CURRENCIES } from '../../shared/price-engine';
 import { buildCsfloatSearchUrl, getBuffLink, getCsboardLink } from '../../shared/items';
 import { createLogger } from '../../shared/logger';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 import {
   buildListingMetadataView,
   type CsfloatListingMetadataText,
@@ -1683,7 +1683,7 @@ function syncDetailCard(): void {
 const bootstrap = () => { initUI(); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('csfloat', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('csfloat', bootstrap);
 }

@@ -19,7 +19,7 @@ import { getCsboardLink } from '../../shared/items';
 import { MarketHashName, type PriceData } from '../../shared/types';
 import { getWalletFeeInfo, formatWalletAmount, receivedForBuyerPays } from '../../shared/steam-fees';
 import { getOrderBook, primeItemNameId, type OrderBook } from '../../shared/market-orders';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 
 const logger = createLogger('market');
 
@@ -318,7 +318,7 @@ function init() {
 const bootstrap = () => { init(); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('steam', bootstrap);
 }

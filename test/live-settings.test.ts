@@ -85,34 +85,45 @@ test('inventory settings repaint keeps the merged context 2 + 16 asset view', ()
 });
 
 /*
-  The master off switch, and the one thing it must never reach.
+  The per-site off switches, and the one thing they must never reach.
 
-  Turning the extension "off" is about what it DRAWS. A seller who mutes the
+  Turning a site "off" is about what the extension DRAWS. A seller who mutes the
   overlays and thereby stops delivering sales he already accepted — or stops
   cancelling a Steam offer for an order csboard has closed, which is the one job
   only his browser can do — has been broken by a settings toggle. These
   assertions are the guard on that boundary.
 */
-test('every drawing content script is gated on the master switch, delivery is not', () => {
-  const gated = [
-    'steam/inventory', 'steam/market-home', 'steam/market', 'steam/market-search',
-    'steam/profile', 'steam/trade-history', 'steam/trade-offers', 'steam/trade-offer',
-    'csfloat/csfloat',
+test('every drawing content script is gated on its own site switch, delivery is not', () => {
+  const gated: ReadonlyArray<readonly [string, string]> = [
+    ['steam/inventory', 'steam'], ['steam/market-home', 'steam'], ['steam/market', 'steam'],
+    ['steam/market-search', 'steam'], ['steam/profile', 'steam'],
+    ['steam/trade-history', 'steam'], ['steam/trade-offers', 'steam'],
+    ['steam/trade-offer', 'steam'], ['csfloat/csfloat', 'csfloat'],
   ];
-  for (const name of gated) {
+  for (const [name, site] of gated) {
     const source = readFileSync(
       new URL(`../src/content-scripts/${name}.ts`, import.meta.url),
       'utf8',
     );
-    assert.match(source, /whenEnhancementsEnabled\(bootstrap\)/, `${name} must be gated`);
+    assert.match(
+      source,
+      new RegExp(`whenSiteEnabled\\('${site}', bootstrap\\)`),
+      `${name} must be gated on the ${site} switch`,
+    );
   }
 
-  // Buff reads it live, so the overlay clears without a reload.
+  // Buff reads its switch live, so the overlay clears without a reload.
   const buffSource = readFileSync(
     new URL('../src/content-scripts/buff/buff.ts', import.meta.url),
     'utf8',
   );
+  assert.match(buffSource, /settings\.showBetterBuffOnBuff === true/);
+  // The pre-split master is still ANDed in for a profile that never ran
+  // migration 4, on Buff as in shared/enhancements.
   assert.match(buffSource, /settings\.enhancementsEnabled !== false/);
+
+  const gate = readFileSync(new URL('../src/shared/enhancements.ts', import.meta.url), 'utf8');
+  assert.match(gate, /if \(settings\.enhancementsEnabled === false\) return false;/);
 
   for (const name of ['steam/p2p-send', 'steam/page-credential-bridge']) {
     const source = readFileSync(
@@ -121,13 +132,13 @@ test('every drawing content script is gated on the master switch, delivery is no
     );
     assert.doesNotMatch(
       source,
-      /whenEnhancementsEnabled/,
-      `${name} must keep running while enhancements are off`,
+      /whenSiteEnabled|isSiteEnabled/,
+      `${name} must keep running while the site switches are off`,
     );
   }
 });
 
-test('the settings patch validator accepts the master switch', () => {
+test('the settings patch validator accepts every site switch', () => {
   const workerSource = readFileSync(
     new URL('../src/background/service-worker.ts', import.meta.url),
     'utf8',
@@ -138,20 +149,23 @@ test('the settings patch validator accepts the master switch', () => {
     workerSource.indexOf('const allowed = new Set(['),
     workerSource.indexOf('const patch: Partial<'),
   );
-  assert.match(allowedBlock, /'enhancementsEnabled'/);
+  for (const key of ['showOnSteam', 'showCsboardPricesOnCsfloat', 'showBetterBuffOnBuff']) {
+    assert.match(allowedBlock, new RegExp(`'${key}'`));
+  }
   assert.match(workerSource, /enhancementsEnabled: settings\.enhancementsEnabled !== false/);
+  assert.match(workerSource, /showOnSteam: settings\.showOnSteam !== false/);
 });
 
 /*
   A control the panel draws but nothing reads is worse than no control.
 
-  This shipped once: the markup for the master switch landed, the wiring in
-  popup.ts did not, and the toggle rendered permanently disabled and inert. The
-  build was green, the capability audit passed, and the only way to see it was
-  to open the packaged popup.js and find the id absent. So the id is asserted on
-  BOTH sides here.
+  This shipped once: the markup for a switch landed, the wiring in popup.ts did
+  not, and the toggle rendered permanently disabled and inert. The build was
+  green, the capability audit passed, and the only way to see it was to open the
+  packaged popup.js and find the id absent. So each id is asserted on BOTH sides
+  here — the markup, and the table popup.ts drives it from.
 */
-test('the master switch is wired, not just drawn', () => {
+test('every site switch is wired, not just drawn', () => {
   const popupHtml = readFileSync(
     new URL('../src/popup/popup.html', import.meta.url),
     'utf8',
@@ -161,16 +175,26 @@ test('the master switch is wired, not just drawn', () => {
     'utf8',
   );
 
-  assert.match(popupHtml, /id="enhancements-toggle"/);
-  assert.match(popupHtml, /id="enhancements-status"/);
+  const wiring: ReadonlyArray<readonly [string, string]> = [
+    ['steam-overlay-toggle', 'showOnSteam'],
+    ['csfloat-overlay-toggle', 'showCsboardPricesOnCsfloat'],
+    ['betterbuff-toggle', 'showBetterBuffOnBuff'],
+  ];
+  for (const [id, key] of wiring) {
+    assert.match(popupHtml, new RegExp(`id="${id}"`), `missing #${id} in the markup`);
+    assert.match(
+      popupSource,
+      new RegExp(`\\{ selector: '#${id}', key: '${key}' \\}`),
+      `#${id} is not bound to ${key}`,
+    );
+  }
 
-  // Reads the state, enables the control, and persists a change.
-  assert.match(popupSource, /enhancements\.checked = settings\.enhancementsEnabled;/);
-  assert.match(popupSource, /enhancements\.disabled = unavailableOrBusy;/);
-  assert.match(popupSource, /#enhancements-toggle'\)\.addEventListener\('change'/);
-  assert.match(popupSource, /updateSettings\(\s*\{ enhancementsEnabled: enabled \}/);
-  // Names what the switch does NOT stop.
-  assert.match(popupSource, /Sale delivery still works/);
+  // Reads the state, enables the control, and persists a change — once, for
+  // every row in that table.
+  assert.match(popupSource, /toggle\.checked = settings\[key\];/);
+  assert.match(popupSource, /toggle\.disabled = unavailableOrBusy;/);
+  assert.match(popupSource, /element<HTMLInputElement>\(selector\)\.addEventListener\('change'/);
+  assert.match(popupSource, /updateSettings\(\s*\{ \[key\]: enabled \}/);
 });
 
 /*

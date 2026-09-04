@@ -30,7 +30,7 @@ import {
   type WalletFeeInfo,
 } from '../../shared/steam-fees';
 import { getOrderBook, rateLimitSecondsLeft } from '../../shared/market-orders';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 import {
   authorizeListingRemovalFromUserGesture,
   batchStopReasonForError,
@@ -437,7 +437,7 @@ function init(): void {
 const bootstrap = () => { init(); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('steam', bootstrap);
 }

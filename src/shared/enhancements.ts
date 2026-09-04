@@ -1,10 +1,16 @@
 /*
   The one gate every on-page enhancement passes through.
 
-  `enhancementsEnabled` is the user's master switch: off, this extension draws
-  nothing anywhere. It is read here rather than inside each script so there is a
-  single place to grep for "what does the off switch actually turn off", and so
-  a script that forgets the check is visible by the absence of one line.
+  What the extension draws is decided per site: `showOnSteam`,
+  `showCsboardPricesOnCsfloat` and `showBetterBuffOnBuff`, each ANDed with the
+  legacy `enhancementsEnabled` master. The master no longer has a control in the
+  popup — migration 4 folded a stored "off" into the three site flags — but it
+  is still read here so an old profile that never ran that migration stays
+  muted rather than lighting up unasked.
+
+  It is read in this module rather than inside each script so there is a single
+  place to grep for "what does the off switch actually turn off", and so a
+  script that forgets the check is visible by the absence of one line.
 
   Two content scripts deliberately do NOT use this: `p2p-send`, which delivers
   and cancels sales the seller has already committed to, and
@@ -15,19 +21,44 @@
 
 import { getSettings } from './storage';
 
-export async function areEnhancementsEnabled(): Promise<boolean> {
+export type EnhancementSite = 'steam' | 'csfloat' | 'buff';
+
+const SITE_SETTING_KEYS = {
+  steam: 'showOnSteam',
+  csfloat: 'showCsboardPricesOnCsfloat',
+  buff: 'showBetterBuffOnBuff',
+} as const;
+
+/*
+  Buff is the one site that has to be asked for.
+
+  Its enhancements rewrite a marketplace UI rather than annotate it, so an
+  install that has never seen the toggle must leave buff.163.com alone. Steam
+  and CSFloat have drawn by default since 1.0 and an absent key there means the
+  profile predates the switch, not that the user declined.
+*/
+const SITE_DEFAULTS: Readonly<Record<EnhancementSite, boolean>> = {
+  steam: true,
+  csfloat: true,
+  buff: false,
+};
+
+export async function isSiteEnabled(site: EnhancementSite): Promise<boolean> {
   try {
-    return (await getSettings()).enhancementsEnabled !== false;
+    const settings = await getSettings();
+    if (settings.enhancementsEnabled === false) return false;
+    const stored = settings[SITE_SETTING_KEYS[site]];
+    return typeof stored === 'boolean' ? stored : SITE_DEFAULTS[site];
   } catch {
-    // Storage unreadable is not consent to go quiet: the extension has always
-    // drawn by default, and failing closed here would look like it broke.
-    return true;
+    // Storage unreadable is not consent to go quiet on the sites that have
+    // always drawn: failing closed there would look like the extension broke.
+    return SITE_DEFAULTS[site];
   }
 }
 
-/** Start a content script only if the master switch is on. */
-export function whenEnhancementsEnabled(start: () => void): void {
-  void areEnhancementsEnabled().then((enabled) => {
+/** Start a content script only if its site is switched on. */
+export function whenSiteEnabled(site: EnhancementSite, start: () => void): void {
+  void isSiteEnabled(site).then((enabled) => {
     if (enabled) start();
   });
 }

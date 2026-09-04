@@ -25,7 +25,7 @@ import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { setupSellUi, injectSellPanel, repaintSellSelection } from './sell-ui';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 import {
   buildCsfolderInspectUrl,
   decorateAccessoryPrices,
@@ -1513,7 +1513,7 @@ async function init() {
 const bootstrap = () => { init().catch((e) => logger.error('Init failed', { error: String(e) })); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('steam', bootstrap);
 }

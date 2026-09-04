@@ -29,7 +29,7 @@ import {
 import { getPattern } from '../../shared/patternDetector';
 import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { parseSteamAssetProperties } from '../../shared/steam-asset-properties';
-import { whenEnhancementsEnabled } from '../../shared/enhancements';
+import { whenSiteEnabled } from '../../shared/enhancements';
 import {
   buildCsfolderInspectUrl,
   decorateAccessoryPrices,
@@ -1808,7 +1808,7 @@ async function init() {
 const bootstrap = () => { init().catch(() => {}); };
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenEnhancementsEnabled(bootstrap));
+  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
 } else {
-  whenEnhancementsEnabled(bootstrap);
+  whenSiteEnabled('steam', bootstrap);
 }

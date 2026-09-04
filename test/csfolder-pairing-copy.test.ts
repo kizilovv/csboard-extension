@@ -2,14 +2,20 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { assertPairingCode } from '../src/shared/gateway-dto.js';
+import { en } from '../src/shared/locales/en.ts';
+import { ru } from '../src/shared/locales/ru.ts';
 
 const popupHtml = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
 const popupSource = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');
 
 test('portfolio pairing UI sends the user to CSFolder, and never asks for a code', () => {
-  assert.match(popupHtml, /Secure CSFolder portfolio sync/);
+  assert.match(popupHtml, /data-i18n="portfolio\.eyebrow"/);
   assert.match(popupHtml, /https:\/\/csfolder\.com\/portfolio\?/);
-  assert.match(popupSource, /Unpair this browser from CSFolder\?/);
+  // The confirm text moved into the dictionaries with everything else the user
+  // reads; what matters is that unpairing still asks before it happens.
+  assert.match(popupSource, /window\.confirm\(t\('portfolio\.unpairConfirm'\)\)/);
+  assert.match(en['portfolio.unpairConfirm'], /CSFolder/);
+  assert.match(ru['portfolio.unpairConfirm'], /CSFolder/);
 
   /*
     The code field is gone, and staying gone is the assertion now.

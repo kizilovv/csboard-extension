@@ -661,6 +661,9 @@ function toPopupSettings(settings: Awaited<ReturnType<typeof getSettings>>): Pop
     enhancementsEnabled: settings.enhancementsEnabled !== false,
     salesNotifications: settings.salesNotifications !== false,
     followCsboardSettings: settings.followCsboardSettings,
+    // Same reasoning as the master above: a profile stored before the per-site
+    // split has no key, and Steam has drawn by default since 1.0.
+    showOnSteam: settings.showOnSteam !== false,
     showCsboardPricesOnCsfloat: settings.showCsboardPricesOnCsfloat,
     showBetterBuffOnBuff: settings.showBetterBuffOnBuff,
     portfolioSyncEnabled: settings.portfolioSyncEnabled,
@@ -705,6 +708,7 @@ function validateSettingsPatch(
     'enhancementsEnabled',
     'salesNotifications',
     'followCsboardSettings',
+    'showOnSteam',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',
     'portfolioSyncEnabled',
@@ -727,6 +731,7 @@ function validateSettingsPatch(
     'enhancementsEnabled',
     'salesNotifications',
     'followCsboardSettings',
+    'showOnSteam',
     'showCsboardPricesOnCsfloat',
     'showBetterBuffOnBuff',
     'portfolioSyncEnabled',

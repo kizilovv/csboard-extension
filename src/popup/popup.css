@@ -77,7 +77,7 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--divider);
   background: rgba(19, 21, 29, 0.96);
   backdrop-filter: blur(12px);
@@ -90,9 +90,23 @@ a:focus-visible {
   letter-spacing: 0.08em;
 }
 
-.header-subtitle {
-  margin-top: 1px;
-  color: var(--text-tertiary);
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/*
+  A 400px popup has no room for a labelled field here, so the select carries an
+  aria-label and sizes to its own text instead of stretching like the settings
+  selects below it.
+*/
+.lang-select {
+  width: auto;
+  min-height: 26px;
+  padding: 3px 22px 3px 8px;
+  border-radius: 999px;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
@@ -142,8 +156,21 @@ main {
   background: var(--bg-surface);
 }
 
-.auth-card {
-  padding-bottom: 12px;
+.account-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.account-card .user-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.account-card .btn {
+  flex: 0 0 auto;
 }
 
 .section-heading-row {
@@ -186,17 +213,10 @@ main {
   font-size: 10px;
 }
 
-.user-bar {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 10px;
-}
-
 .avatar {
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--bg-raised);
 }
@@ -215,13 +235,6 @@ main {
   font-weight: 750;
   letter-spacing: 0.03em;
   user-select: none;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
 }
 
 .user-name {
@@ -308,6 +321,57 @@ input:disabled,
 button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
+}
+
+/*
+  Site rows are a list, not four independent settings blocks: they share one
+  hairline grid so the eye reads "three sites, three switches" in one pass.
+*/
+.toggle-list {
+  display: grid;
+  margin-top: 8px;
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 10px;
+}
+
+.toggle-row + .toggle-row {
+  border-top: 1px solid var(--divider);
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
+.footer-status {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.footer-status .setting-description {
+  display: inline;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .setting-row,
@@ -448,15 +512,6 @@ button:disabled {
   color: var(--accent-hover);
 }
 
-.text-button.danger {
-  margin-top: 9px;
-  color: var(--red);
-}
-
-.pair-form {
-  margin-top: 12px;
-}
-
 .pair-help {
   display: block;
   margin-top: 6px;
@@ -466,12 +521,6 @@ button:disabled {
 
 .pair-help .text-button {
   text-decoration: none;
-}
-
-.input-with-button {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 7px;
 }
 
 .source-list {
@@ -484,8 +533,8 @@ button:disabled {
 }
 
 .source-row {
-  min-height: 48px;
-  padding: 8px 10px;
+  min-height: 40px;
+  padding: 7px 10px;
 }
 
 .source-row + .source-row {
@@ -540,7 +589,7 @@ button:disabled {
 }
 
 .privacy-disclosure {
-  margin-top: 11px;
+  margin-top: 10px;
   color: var(--text-secondary);
   font-size: 10px;
 }
@@ -552,13 +601,6 @@ button:disabled {
 
 .privacy-disclosure p {
   margin: 6px 0 0;
-}
-
-.data-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .notice {

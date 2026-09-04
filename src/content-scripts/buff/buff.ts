@@ -191,11 +191,13 @@ async function reloadLocalState(): Promise<void> {
     };
 
     /*
-      The master switch outranks the per-site opt-in, and is re-read here rather
-      than at boot: this function already re-runs on every settings change, so
-      flipping the switch takes the overlay down (and puts it back) without a
-      reload — which is what a user who just turned the extension off expects to
-      see on the page he is looking at.
+      The Buff switch is re-read here rather than at boot: this function already
+      re-runs on every settings change, so flipping it takes the overlay down
+      (and puts it back) without a reload — which is what a user who just turned
+      Buff off in the popup expects to see on the page he is looking at.
+
+      The legacy master is still ANDed in for a profile that predates migration
+      4, exactly as `shared/enhancements` does for the other two sites.
     */
     const enhancementsOn = settings.enhancementsEnabled !== false;
     if (enhancementsOn && settings.showBetterBuffOnBuff === true) enableEnhancements();

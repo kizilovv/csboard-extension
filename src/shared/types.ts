@@ -482,6 +482,16 @@ export interface ExtensionSettings {
   checkBoardsIntervalMinutes: number;
   /** One-way CSBOARD -> extension currency/source sync. Existing behavior stays on. */
   followCsboardSettings: boolean;
+  /*
+    Per-site switches for what the extension DRAWS, one per host surface.
+
+    They replaced a single master switch: "off everywhere" was the only shape
+    the old control could express, and the popup then needed a second row per
+    site anyway. `enhancementsEnabled` above is still honoured as an AND, so a
+    profile stored before this split keeps whatever it had until migration 4
+    folds it into these three.
+  */
+  showOnSteam: boolean;
   /** Show CSBOARD price comparison UI on csfloat.com. */
   showCsboardPricesOnCsfloat: boolean;
   /** Opt-in BetterBuff-style read-only enhancements on buff.163.com. */
@@ -502,6 +512,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   showBuffBuyOrder: true,
   checkBoardsIntervalMinutes: 1,
   followCsboardSettings: true,
+  showOnSteam: true,
   showCsboardPricesOnCsfloat: true,
   showBetterBuffOnBuff: false,
   portfolioSyncEnabled: false,

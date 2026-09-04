@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import { en } from '../src/shared/locales/en.ts';
+import { ru } from '../src/shared/locales/ru.ts';
+
 const privacy = readFileSync(new URL('../PRIVACY.md', import.meta.url), 'utf8');
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
@@ -40,24 +43,49 @@ test('portfolio disclosures match the supported upload sources and hourly opt-in
   assert.match(privacy, /^\| Accepted-offer correlation \|/m);
   assert.doesNotMatch(privacy, /uploads the deterministically newest 1,000/i);
 
+  /*
+    The disclosure is now a collapsed <details> instead of five open sentences,
+    and it is the dictionary entry that carries the text.
+
+    What is asserted is unchanged: every fact still ships, still sits directly
+    above the consent control, and now has to exist in every locale — a Russian
+    user consenting to a blank disclosure would be worse than a long one.
+  */
   const popupDisclosure = popupHtml.match(
-    /<details class="privacy-disclosure" open>([\s\S]*?)<\/details>/,
+    /<details class="privacy-disclosure">([\s\S]*?)<\/details>/,
   )?.[1] ?? '';
   assert.match(popupDisclosure, /up to 100 (?:most )?recent Steam trades/i);
-  assert.match(popupDisclosure, /automatic sync[^.]*once per hour/i);
-  assert.match(popupDisclosure, /accepted offers[^.]*last 30 days/i);
-  assert.match(popupDisclosure, /active offers[^.]*raw Steam notes[^.]*not uploaded/i);
-  assert.match(popupDisclosure, /Steam Market history[^.]*not uploaded/i);
+  assert.match(popupDisclosure, /automatic sync runs about once per hour/i);
+  assert.match(popupDisclosure, /accepted offers from the last 30 days/i);
+  assert.match(
+    popupDisclosure,
+    /never uploaded[^.]*active offers[^.]*raw Steam notes[^.]*Steam Market history/i,
+  );
   assert.doesNotMatch(popupDisclosure, /market facts/i);
 
-  assert.match(popupHtml, /allows manual sync and automatic sync[^.]*once per hour/i);
   assert.ok(
-    popupHtml.indexOf('class="privacy-disclosure" open') <
+    popupHtml.indexOf('class="privacy-disclosure"') <
       popupHtml.indexOf('id="portfolio-sync-toggle"'),
-    'the data disclosure must be visible before the upload consent control',
+    'the data disclosure must sit before the upload consent control',
   );
-  assert.match(popupSource, /Enabled for manual and hourly sync/);
-  assert.match(popupSource, /Enabled sources sync automatically[^.]*once per hour/i);
+  const englishDisclosure = en['portfolio.disclosure.body'];
+  assert.equal(popupDisclosure.includes(englishDisclosure), true,
+    'the markup fallback must be the English dictionary entry, verbatim');
+  assert.match(englishDisclosure, /Steam credentials/i);
+
+  const russianDisclosure = ru['portfolio.disclosure.body'];
+  assert.match(russianDisclosure, /до 100 последних обменов Steam/i);
+  assert.match(russianDisclosure, /30 дней/i);
+  assert.match(russianDisclosure, /раз в час/i);
+  assert.match(russianDisclosure, /Никогда не уходят[^.]*активные предложения/i);
+  assert.match(russianDisclosure, /история Steam Market/i);
+  assert.match(russianDisclosure, /учётные данные Steam/i);
+
+  // The paired-and-enabled summary is the other place the hourly cadence is
+  // stated, and it is what a user sees without opening anything.
+  assert.match(en['portfolio.state.pairedOn'], /about once per hour/i);
+  assert.match(ru['portfolio.state.pairedOn'], /раз в час/i);
+  assert.match(popupSource, /t\('portfolio\.state\.pairedOn'\)/);
 
   assert.match(storeListing, /up to 100 most recent Steam trades/i);
   assert.match(storeListing, /automatic sync[^.]*once per hour/i);

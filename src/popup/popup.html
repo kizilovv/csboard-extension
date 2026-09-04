@@ -3,50 +3,82 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>csboard settings</title>
+  <title>csboard</title>
   <link rel="stylesheet" href="popup.css">
 </head>
+<!--
+  Inline English is the fallback, not a placeholder.
+
+  Every string a locale can replace carries `data-i18n`, and the popup script
+  overwrites it on load. Leaving the English text in the markup means a popup
+  whose script failed to run is still a readable panel instead of a blank one.
+-->
 <body>
   <div id="app">
     <header class="header">
-      <div>
-        <div class="logo">csboard</div>
-        <div class="header-subtitle">Extension settings</div>
-      </div>
-      <div class="connection-pill" aria-live="polite">
-        <span id="status-dot" class="status-dot offline" aria-hidden="true"></span>
-        <span id="connection-label">Checking…</span>
+      <span class="logo">csboard</span>
+      <div class="header-right">
+        <span class="connection-pill" aria-live="polite">
+          <span id="status-dot" class="status-dot offline" aria-hidden="true"></span>
+          <span id="connection-label" data-i18n="status.checking">Checking…</span>
+        </span>
+        <select id="language-select" class="lang-select" data-i18n-label="lang.label">
+          <option value="auto" data-i18n="lang.auto">Auto</option>
+          <option value="en">English</option>
+          <option value="ru">Русский</option>
+        </select>
       </div>
     </header>
 
     <main>
+      <section class="card account-card" aria-label="csboard account">
+        <span id="user-avatar-fallback" class="avatar avatar-fallback" aria-hidden="true">?</span>
+        <img id="user-avatar" class="avatar avatar-image hidden" alt="" referrerpolicy="no-referrer">
+        <span id="user-name" class="user-name" data-i18n="status.checking">Checking…</span>
+        <span id="user-badge" class="badge hidden" data-i18n="account.premium">Premium</span>
+        <a id="login-btn" class="btn btn-secondary btn-compact" href="#" target="_blank" rel="noopener noreferrer" data-i18n="account.open">Open csboard</a>
+      </section>
+
       <!--
-        The master switch, first thing in the panel.
+        One row per site, no supporting prose.
 
-        It was missing entirely: the popup offered currency, price source and a
-        per-site overlay toggle, but no way to say "stop drawing on my pages".
-        The supporting line names the one thing it does NOT stop, because a
-        seller who reads "off" and then loses a sale to an undelivered trade has
-        been misled by this control.
+        This replaced a master switch plus two per-site rows that each explained
+        themselves in a sentence: the switch label already says which site it
+        governs, and a seller reading three site names picks the one he means
+        faster than he reads three descriptions of it.
       -->
-      <section class="card" aria-labelledby="master-heading">
-        <h1 id="master-heading" class="card-title">Extension</h1>
-        <label class="setting-row">
-          <span>
-            <span class="setting-title">Show csboard on trading sites</span>
-            <span id="enhancements-status" class="setting-description">Loading…</span>
-          </span>
-          <span class="switch">
-            <input id="enhancements-toggle" type="checkbox" disabled>
-            <span class="switch-track" aria-hidden="true"></span>
-          </span>
-        </label>
+      <section class="card" aria-labelledby="sites-heading">
+        <p id="sites-heading" class="eyebrow" data-i18n="sites.eyebrow">Show csboard on</p>
+        <div class="toggle-list">
+          <label class="toggle-row">
+            <span class="setting-title" data-i18n="sites.steam">Steam</span>
+            <span class="switch">
+              <input id="steam-overlay-toggle" type="checkbox" disabled>
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <span class="setting-title" data-i18n="sites.csfloat">CSFloat</span>
+            <span class="switch">
+              <input id="csfloat-overlay-toggle" type="checkbox" disabled>
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <span class="setting-title" data-i18n="sites.buff">Buff163</span>
+            <span class="switch">
+              <input id="betterbuff-toggle" type="checkbox" disabled>
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+        </div>
 
+        <!--
+          Sale alerts leave the browser and land on the operating system, so
+          they stay a separate consent rather than riding on a site toggle.
+        -->
         <label class="setting-row">
-          <span>
-            <span class="setting-title">Notify me when something sells</span>
-            <span class="setting-description">A desktop notification the moment a sale needs you. The icon shows the count either way.</span>
-          </span>
+          <span class="setting-title" data-i18n="notifications.sales">Sale alerts</span>
           <span class="switch">
             <input id="sales-notifications-toggle" type="checkbox" disabled>
             <span class="switch-track" aria-hidden="true"></span>
@@ -54,37 +86,15 @@
         </label>
       </section>
 
-      <section class="card auth-card" aria-labelledby="account-heading">
-        <div class="section-heading-row">
-          <div>
-            <p class="eyebrow">Account</p>
-            <h1 id="account-heading" class="card-title">csboard connection</h1>
-          </div>
-          <a id="login-btn" class="btn btn-secondary btn-compact" href="#" target="_blank" rel="noopener noreferrer">Open csboard</a>
-        </div>
-        <div id="auth-user" class="user-bar hidden">
-          <span id="user-avatar-fallback" class="avatar avatar-fallback" aria-hidden="true">?</span>
-          <img id="user-avatar" class="avatar avatar-image hidden" alt="" referrerpolicy="no-referrer">
-          <div class="user-info">
-            <span id="user-name" class="user-name"></span>
-            <span id="user-badge" class="badge hidden">Premium</span>
-          </div>
-        </div>
-        <p id="auth-detail" class="supporting-text">Checking your csboard session…</p>
-      </section>
-
       <section class="card" aria-labelledby="prices-heading">
         <div class="section-heading-row">
-          <div>
-            <p class="eyebrow">Prices</p>
-            <h2 id="prices-heading" class="card-title">Display preferences</h2>
-          </div>
-          <button id="sync-preferences-btn" class="text-button" type="button">Sync now</button>
+          <h2 id="prices-heading" class="card-title" data-i18n="prices.title">Prices</h2>
+          <button id="sync-preferences-btn" class="text-button" type="button" data-i18n="prices.pull">Sync</button>
         </div>
 
         <div class="field-grid">
           <label class="field" for="currency-select">
-            <span class="field-label">Currency</span>
+            <span class="field-label" data-i18n="prices.currency">Currency</span>
             <select id="currency-select" disabled>
               <option value="USD">USD — $</option>
               <option value="EUR">EUR — €</option>
@@ -105,7 +115,7 @@
           </label>
 
           <label class="field" for="price-source-select">
-            <span class="field-label">Price source</span>
+            <span class="field-label" data-i18n="prices.source">Source</span>
             <select id="price-source-select" disabled>
               <option value="buff163">Buff163 Ask</option>
               <option value="buff163_buy">Buff163 Buy</option>
@@ -121,76 +131,61 @@
 
         <label class="setting-row">
           <span>
-            <span class="setting-title">Follow settings from csboard</span>
-            <span id="preference-sync-status" class="setting-description">Loading preference sync state…</span>
+            <span class="setting-title" data-i18n="prices.follow">Follow csboard settings</span>
+            <span id="preference-sync-status" class="setting-description"></span>
           </span>
           <span class="switch">
             <input id="sync-preferences-toggle" type="checkbox" disabled>
             <span class="switch-track" aria-hidden="true"></span>
           </span>
         </label>
-      </section>
 
-      <section class="card" aria-labelledby="integrations-heading">
-        <p class="eyebrow">Integrations</p>
-        <h2 id="integrations-heading" class="card-title">Marketplace overlays</h2>
-        <label class="setting-row">
-          <span>
-            <span class="setting-title">Show csboard prices on CSFloat</span>
-            <span class="setting-description">Controls only the csboard overlay on csfloat.com.</span>
+        <div class="card-footer">
+          <span class="footer-status">
+            <span id="prices-count">—</span>
+            <span id="prices-updated" class="setting-description"></span>
           </span>
-          <span class="switch">
-            <input id="csfloat-overlay-toggle" type="checkbox" disabled>
-            <span class="switch-track" aria-hidden="true"></span>
-          </span>
-        </label>
-        <label class="setting-row">
-          <span>
-            <span class="setting-title">Enable BetterBuff tools on Buff163</span>
-            <span class="setting-description">Adds listing age, price comparison, converted prices, and safe item links. Off by default.</span>
-          </span>
-          <span class="switch">
-            <input id="betterbuff-toggle" type="checkbox" disabled>
-            <span class="switch-track" aria-hidden="true"></span>
-          </span>
-        </label>
+          <button id="refresh-prices-btn" class="btn btn-secondary btn-compact" type="button" data-i18n="prices.refresh">Refresh</button>
+        </div>
       </section>
 
       <section class="card" aria-labelledby="portfolio-heading">
         <div class="section-heading-row">
           <div>
-            <p class="eyebrow">CSFolder</p>
-            <h2 id="portfolio-heading" class="card-title">Secure CSFolder portfolio sync</h2>
+            <p class="eyebrow" data-i18n="portfolio.eyebrow">CSFolder</p>
+            <h2 id="portfolio-heading" class="card-title" data-i18n="portfolio.title">Portfolio sync</h2>
           </div>
-          <span id="portfolio-state-badge" class="state-badge neutral">Checking</span>
+          <span id="portfolio-state-badge" class="state-badge neutral" data-i18n="portfolio.badge.checking">Checking</span>
         </div>
 
-        <p id="portfolio-summary" class="supporting-text">Checking pairing status…</p>
+        <p id="portfolio-summary" class="supporting-text" data-i18n="portfolio.state.checking">Checking pairing…</p>
         <p id="portfolio-account" class="mono-detail hidden"></p>
 
         <!--
           Pairing happens on the website in one click. The code field that used
           to live here asked the user to fetch a 5-minute string from CSFolder
           and retype it into a browser popup, for a handshake the site now does
-          by itself. Leaving it in offered a harder second way to do the same
-          thing, and a wrong one to try first.
+          by itself.
         -->
         <p id="pair-prompt" class="pair-help hidden">
-          Pair from your
-          <a class="text-button" href="https://csfolder.com/portfolio?utm_source=csboard_extension&amp;utm_medium=pairing" target="_blank" rel="noopener noreferrer">CSFolder portfolio</a>.
-          One click there connects this browser.
+          <a class="text-button" href="https://csfolder.com/portfolio?utm_source=csboard_extension&amp;utm_medium=pairing" target="_blank" rel="noopener noreferrer" data-i18n="portfolio.pairLink">Pair in your CSFolder portfolio</a>
         </p>
 
-        <details class="privacy-disclosure" open>
-          <summary>Data and automatic sync</summary>
-          <p>If you enable uploads, sync sends current inventory facts and up to 100 most recent Steam trades from the sources you choose. Trade History also includes correlation facts for accepted offers from the last 30 days, such as a completed trade ID and an optional Buff163 or CSFloat hint. Active offers, raw Steam notes/messages, and Steam Market history are not uploaded. Automatic sync runs about once per hour; Sync now runs it immediately. Steam credentials and raw authenticated pages never leave this browser.</p>
+        <!--
+          Collapsed, but still the last thing above the consent control.
+
+          Every fact the store listing and PRIVACY.md disclose is inside it,
+          unchanged; what went is the five-sentence version that pushed the
+          switch it belongs to off the visible panel. A disclosure nobody scrolls
+          past is not more honest than one they can open in place.
+        -->
+        <details class="privacy-disclosure">
+          <summary data-i18n="portfolio.disclosure.summary">What gets uploaded</summary>
+          <p data-i18n="portfolio.disclosure.body">Uploaded when you switch it on: inventory facts and up to 100 most recent Steam trades from the sources you pick, plus, for accepted offers from the last 30 days, a completed trade ID and an optional Buff163 or CSFloat hint. Never uploaded: active offers, raw Steam notes, Steam Market history, Steam credentials. Automatic sync runs about once per hour.</p>
         </details>
 
         <label id="portfolio-enable-row" class="setting-row hidden">
-          <span>
-            <span class="setting-title">Enable portfolio uploads</span>
-            <span class="setting-description">Off by default. Enabling this and a source allows manual sync and automatic sync about once per hour.</span>
-          </span>
+          <span class="setting-title" data-i18n="portfolio.enable">Upload portfolio</span>
           <span class="switch">
             <input id="portfolio-sync-toggle" type="checkbox" disabled>
             <span class="switch-track" aria-hidden="true"></span>
@@ -198,18 +193,18 @@
         </label>
 
         <fieldset id="portfolio-sources" class="source-list" disabled>
-          <legend class="sr-only">Portfolio data sources</legend>
+          <legend class="sr-only" data-i18n="portfolio.sources.legend">Portfolio data sources</legend>
           <label class="source-row">
             <span>
-              <span class="setting-title">All Inventory</span>
-              <span id="source-inventory-status" class="setting-description">Off</span>
+              <span class="setting-title" data-i18n="portfolio.sources.inventory">Inventory</span>
+              <span id="source-inventory-status" class="setting-description"></span>
             </span>
             <input id="source-inventory" type="checkbox" data-source="inventory">
           </label>
           <label class="source-row">
             <span>
-              <span class="setting-title">Trade History</span>
-              <span id="source-trade-history-status" class="setting-description">Off</span>
+              <span class="setting-title" data-i18n="portfolio.sources.tradeHistory">Trade history</span>
+              <span id="source-trade-history-status" class="setting-description"></span>
             </span>
             <input id="source-trade-history" type="checkbox" data-source="tradeHistory">
           </label>
@@ -217,32 +212,23 @@
 
         <div id="portfolio-metrics" class="metrics hidden">
           <div>
-            <span class="metric-label">Last success</span>
-            <span id="portfolio-last-success" class="metric-value">Never</span>
+            <span class="metric-label" data-i18n="portfolio.metric.lastOk">Last ok</span>
+            <span id="portfolio-last-success" class="metric-value">—</span>
           </div>
           <div>
-            <span class="metric-label">Last attempt</span>
-            <span id="portfolio-last-attempt" class="metric-value">Never</span>
+            <span class="metric-label" data-i18n="portfolio.metric.lastTry">Last try</span>
+            <span id="portfolio-last-attempt" class="metric-value">—</span>
           </div>
           <div>
-            <span class="metric-label">Queued</span>
-            <span id="portfolio-queued" class="metric-value">0 records</span>
+            <span class="metric-label" data-i18n="portfolio.metric.queued">Queued</span>
+            <span id="portfolio-queued" class="metric-value">0</span>
           </div>
         </div>
 
         <div id="portfolio-actions" class="button-row hidden">
-          <button id="sync-portfolio-btn" class="btn btn-primary" type="button">Sync now</button>
-          <button id="unpair-device-btn" class="btn btn-danger-quiet" type="button">Unpair</button>
+          <button id="sync-portfolio-btn" class="btn btn-primary" type="button" data-i18n="portfolio.syncNow">Sync now</button>
+          <button id="unpair-device-btn" class="btn btn-danger-quiet" type="button" data-i18n="portfolio.unpair">Unpair</button>
         </div>
-
-      </section>
-
-      <section class="card data-card" aria-label="Price data status">
-        <div>
-          <span id="prices-count" class="setting-title">Price data: —</span>
-          <span id="prices-updated" class="setting-description">Checking cache…</span>
-        </div>
-        <button id="refresh-prices-btn" class="btn btn-secondary btn-compact" type="button">Refresh</button>
       </section>
 
       <div id="popup-notice" class="notice hidden" role="status" aria-live="polite"></div>

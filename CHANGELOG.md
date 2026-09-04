@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.21
+
+- The popup speaks Russian, and picks the language itself. Detection follows the
+  browser's own UI language, then its accept-language list, and a picker in the
+  header pins English or Russian when the browser's answer is the wrong one — a
+  Russian trader running an English Chrome is the common case here, not the
+  exception. Chrome's native `_locales` was not used precisely because it offers
+  no such override. Only the popup is translated; the overlays drawn on Steam,
+  CSFloat and Buff are still English.
+- The master on/off switch became three per-site switches: Steam, CSFloat,
+  Buff163. A profile that had the master OFF comes out of migration 4 muted on
+  all three — the popup no longer draws a control that could undo it, so that
+  intent has to be carried over rather than reset.
+- The settings panel lost roughly half its words. The account paragraph that
+  restated the connection pill, four per-toggle descriptions, the "records"
+  suffix on every count and the standalone price-cache card are gone; the
+  CSFolder data disclosure keeps every fact it stated, in a collapsed block
+  directly above the upload switch it belongs to.
+
 ## 1.1.20
 
 - The site can ask us to send the trade for one **обмен с доплатой** — a deal

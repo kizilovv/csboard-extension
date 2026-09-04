@@ -12,10 +12,13 @@ import {
   isSupportedPriceSource,
   type PopupInternalRequest,
 } from '../src/popup/contracts.ts';
+import { en } from '../src/shared/locales/en.ts';
+import { ru } from '../src/shared/locales/ru.ts';
 
 test('popup migration defaults preserve shipped preference sync but keep portfolio opt-in off', () => {
   assert.equal(DEFAULT_POPUP_SETTINGS.schemaVersion, 2);
   assert.equal(DEFAULT_POPUP_SETTINGS.followCsboardSettings, true);
+  assert.equal(DEFAULT_POPUP_SETTINGS.showOnSteam, true);
   assert.equal(DEFAULT_POPUP_SETTINGS.showCsboardPricesOnCsfloat, true);
   assert.equal(DEFAULT_POPUP_SETTINGS.showBetterBuffOnBuff, false);
   assert.equal(DEFAULT_POPUP_SETTINGS.portfolioSyncEnabled, false);
@@ -77,6 +80,15 @@ test('accepted-offer enrichment follows trade-history consent and stays out of p
   assert.doesNotMatch(popup, /id="source-trade-offers-status"/);
 });
 
+/*
+  A cause the user can act on, in whatever language the popup is showing.
+
+  These codes are the difference between "sync failed" and "sign in to Steam".
+  They arrive sanitized from the background and are looked up in the dictionary,
+  so an untranslated one degrades to a de-cased code rather than disappearing —
+  but a code shipped without a translation is still a regression, and every
+  locale is checked, not just English.
+*/
 test('portfolio sync diagnostics distinguish auth, Steam availability, and partial history', () => {
   const source = readFileSync(new URL('../src/popup/popup.ts', import.meta.url), 'utf8');
 
@@ -87,12 +99,56 @@ test('portfolio sync diagnostics distinguish auth, Steam availability, and parti
     'STEAM_UNAVAILABLE',
     'STEAM_RESPONSE_INVALID',
     'TRADE_HISTORY_TRUNCATED',
+    'OVERSIZED_RECORDS_DROPPED',
   ]) {
-    assert.match(source, new RegExp(`${code}:`));
+    for (const [locale, dictionary] of [['en', en], ['ru', ru]] as const) {
+      const message = (dictionary as Record<string, string>)[`code.${code}`];
+      assert.ok(message && message.length > 0, `${locale} is missing code.${code}`);
+    }
   }
-  assert.match(source, /Trade History was partially synced/);
-  assert.match(source, /newest records were uploaded; older records were not included in this run/);
+
+  assert.match(source, /const key = `code\.\$\{safeCode\}`;/);
   assert.match(source, /warningCodes\.has\('OVERSIZED_RECORDS_DROPPED'\)/);
+  // Partial trade history has its own notice: "finished" and "finished, but
+  // only the newest rows" are different facts for someone reconciling a book.
+  assert.match(source, /t\('notice\.syncTruncated'\)/);
+  assert.match(en['notice.syncTruncated'], /newest records only/i);
+});
+
+/*
+  Russian is typed against English, so a missing key is a compile error rather
+  than a raw key id in the panel. This is the runtime half of that: an entry
+  that exists but is empty type-checks and renders as blank UI.
+*/
+test('every message has a non-empty string in every shipped locale', () => {
+  const keys = Object.keys(en);
+  assert.ok(keys.length > 0);
+  assert.deepEqual(Object.keys(ru).sort(), keys.slice().sort());
+
+  for (const [locale, dictionary] of [['en', en], ['ru', ru]] as const) {
+    for (const [key, value] of Object.entries(dictionary)) {
+      assert.equal(typeof value, 'string', `${locale}.${key} is not a string`);
+      assert.ok((value as string).trim().length > 0, `${locale}.${key} is empty`);
+    }
+  }
+});
+
+/*
+  Placeholders are the one part of a translation that is not free text: a
+  `{count}` dropped in Russian renders a sentence with a hole where the number
+  belongs, and nothing else in the pipeline notices.
+*/
+test('placeholders survive translation', () => {
+  const placeholders = (value: string) =>
+    [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+
+  for (const [key, english] of Object.entries(en)) {
+    assert.deepEqual(
+      placeholders((ru as Record<string, string>)[key] ?? ''),
+      placeholders(english),
+      `ru.${key} does not carry the same placeholders as English`,
+    );
+  }
 });
 
 test('the popup no longer offers P2P listing: publishing lives on the site and in the app', () => {
