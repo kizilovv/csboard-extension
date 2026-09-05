@@ -278,17 +278,34 @@ test('the P2P pass uses the unfiltered offer reader and a legal history size', (
     (pass.match(/readTradeOffersForDisplay\(\{ received: false \}\)/g) ?? []).length,
     2,
   );
-  // 100 because the provider rejects more before it makes a request, and
-  // tolerant rows because one malformed trade must not take the page down.
-  assert.match(pass, /provider\.readRecentTrades\(100, \{ skipUnreadableRows: true \}\)/);
+  /*
+    The history read is PAGED, and the page size has to stay legal.
+
+    This assertion used to pin the literal 100, and it is the reason it is
+    written against the constant now: the reporter spent its whole life asking
+    for 200 against a cap of 100, so `readRecentTrades` threw INVALID_PAYLOAD
+    before making a request and the completed-trade half never ran once. A page
+    size the provider rejects is not a slow path, it is a dead one.
+  */
+  assert.match(pass, /const PAGE = 250;/);
+  assert.match(pass, /const MAX_PAGES = \d+;/);
+  assert.match(pass, /provider\.readRecentTrades\(PAGE, \{/);
+  // Tolerant rows, because one malformed trade must not take the page down —
+  // a bad neighbour costing us a Steam rollback is the failure that matters.
+  assert.match(pass, /skipUnreadableRows: true,/);
+  // Descriptions are most of the response and the tracker matches on asset id.
+  assert.match(pass, /getDescriptions: false,/);
+  // Paging is what makes a fixed page size survivable: without the cursor this
+  // reads the newest 250 rows forever and never reaches an older sale.
+  assert.match(pass, /\.\.\.\(cursor \? \{ cursor \} : \{\}\),/);
 
   const providerSource = readFileSync(
     new URL('../src/background/steam-read-session-provider.ts', import.meta.url),
     'utf8',
   );
-  // The cap that made 200 illegal, and the filter that made the other reader
-  // the wrong one. If either moves, this test is the reminder.
-  assert.match(providerSource, /maxTrades > 100/);
+  // The cap the page size has to stay under, and the filter that made the other
+  // reader the wrong one. If either moves, this test is the reminder.
+  assert.match(providerSource, /maxTrades > 250/);
   assert.match(providerSource, /if \(state !== 3\) return \[\];/);
 
   /*
