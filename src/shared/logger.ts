@@ -59,6 +59,24 @@ function redactValue(value: unknown, depth = 0): unknown {
   return value;
 }
 
+/**
+ * Turn anything a rejected promise can carry into one readable sentence.
+ *
+ * Passing a raw value as log *data* is what produced "[object Object]" in a
+ * user's screenshot: the message said nothing and the reason was one level
+ * down, where a console screenshot never reaches. A cause belongs in the
+ * message text.
+ */
+export function describeError(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error) ?? 'unknown error';
+  } catch {
+    return 'unknown error';
+  }
+}
+
 /** Exported for security snapshot tests and sanitized diagnostics export. */
 export function redactLogData(data?: Record<string, unknown>): Record<string, unknown> | undefined {
   return data ? redactValue(data) as Record<string, unknown> : undefined;

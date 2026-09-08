@@ -13,7 +13,7 @@
 // Also: Override ShowTradeOffer to open in new tab
 
 import { priceEngine } from '../../shared/price-engine';
-import { createLogger } from '../../shared/logger';
+import { createLogger, describeError } from '../../shared/logger';
 import { injectScript, injectStyle } from '../../shared/inject';
 import { addSSTandExtIndicators, makeItemColorful, addFloatIndicator, addDopplerPhase, addPatternIndicator, getBuffLink, buildCsfloatSearchUrl } from '../../shared/items';
 import { getPattern } from '../../shared/patternDetector';
@@ -30,21 +30,6 @@ import {
 import type { ParsedSteamAssetProperties } from '../../shared/steam-asset-properties';
 
 const logger = createLogger('trade-offers-list');
-
-/**
- * The router answers a rejected handler with a plain string, and `String(err)`
- * on that gives "[object Object]" in a screenshot. Users report what the
- * console shows, so the console has to show the cause.
- */
-function describeError(err: unknown): string {
-  if (typeof err === 'string') return err;
-  if (err instanceof Error) return err.message;
-  try {
-    return JSON.stringify(err) ?? 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
 
 // ============================================================
 // Page type detection (cs2trader pattern)
@@ -274,8 +259,8 @@ class TradeOffersListScript {
       this.addQuickAcceptAndDeclineButtons();
 
       // 8. Enrich with float data (async)
-      this.enrichWithFloat(response.items).catch(err => {
-        logger.warn('Float enrichment failed', { error: String(err) });
+      this.enrichWithFloat(response.items).catch((err) => {
+        logger.warn(`Float enrichment failed: ${describeError(err)}`);
       });
     } catch (err) {
       // Steam data is an enhancement, not a precondition. Losing it used to
@@ -675,7 +660,7 @@ class TradeOffersListScript {
         if (!this.assetProperties.has(assetId)) this.assetProperties.set(assetId, parsed);
       }
     } catch (err) {
-      logger.warn('Could not read the asset property cache', { error: String(err) });
+      logger.warn(`Could not read the asset property cache: ${describeError(err)}`);
     }
 
     // 1. Partner items: match the reads already in flight to the offer's items,
@@ -692,8 +677,11 @@ class TradeOffersListScript {
               data: { steamId: mySteamId, ...(readSteamPageCredential() ?? {}) },
             },
             (resp) => {
-              if (chrome.runtime.lastError) { reject(chrome.runtime.lastError.message); return; }
-              if (resp?.error) { reject(resp.error); return; }
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message ?? 'message port closed'));
+                return;
+              }
+              if (resp?.error) { reject(new Error(describeError(resp.error))); return; }
               resolve(resp);
             }
           );
@@ -709,7 +697,7 @@ class TradeOffersListScript {
           logger.info('Enriched OUR items on list', { apiItems: result.items.length, enriched });
         }
       } catch (err) {
-        logger.warn('Failed to enrich our items on list', { error: String(err) });
+        logger.warn(`Failed to enrich our items on list: ${describeError(err)}`);
       }
     }
 
@@ -856,7 +844,7 @@ class TradeOffersListScript {
       const pending = new Map(this.pendingCacheWrites);
       this.pendingCacheWrites.clear();
       rememberAssetProperties(pending).catch((err) => {
-        logger.warn('Could not persist asset properties', { error: String(err) });
+        logger.warn(`Could not persist asset properties: ${describeError(err)}`);
       });
     }, CACHE_WRITE_DEBOUNCE_MS);
   }

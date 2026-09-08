@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.22
+
+- The trade offers list shows the other side's float, not only ours. Steam
+  serves `asset_properties` — wear rating, pattern seed, item certificate —
+  from the ordinary public inventory endpoint for any profile, with no access
+  token and no trade session; the offers API is simply the one source that
+  never carries them, which is what made this look impossible. A partner is
+  read once one of their offers comes within a screen of the viewport, three
+  reads at a time, and every asset id learned that way is cached, because a
+  float never changes.
+- Those reads no longer wait on anything. Steam's own trade-offers API answers
+  in 1.5-4 seconds, and queueing partner reads behind it made that delay the
+  floor for every float on the page; the partner's account id is in each
+  offer's avatar, which is all a read needs.
+- New **View in 3D** in a trade slot's action menu, above Get screenshot. It
+  opens over the page rather than in a tab. Steam sends a `frame-src` allowlist
+  with every community page and no third-party viewer is on it, so the modal
+  frames an extension page, which frames the viewer — a direct frame renders a
+  blank box and reports nothing.
+- A failed enrichment says why. `Failed to enrich our items [object Object]`
+  was our own bug: the cause was passed as log data, one level below the text a
+  user can screenshot.
+
 ## 1.1.21
 
 - The popup speaks Russian, and picks the language itself. Detection follows the

@@ -15,7 +15,7 @@
 // 8. periodicallyUpdateTotals — updates in-trade totals every 1s
 
 import { priceEngine } from '../../shared/price-engine';
-import { createLogger } from '../../shared/logger';
+import { createLogger, describeError } from '../../shared/logger';
 import { injectScript } from '../../shared/inject';
 import { readSteamPageCredential } from '../../shared/steam-page-credential';
 import {
@@ -1504,8 +1504,11 @@ const enrichWithAssetProperties = async (): Promise<void> => {
             data: { steamId: userSteamID, ...(readSteamPageCredential() ?? {}) },
           },
           (response) => {
-            if (chrome.runtime.lastError) { reject(chrome.runtime.lastError.message); return; }
-            if (response?.error) { reject(response.error); return; }
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message ?? 'message port closed'));
+              return;
+            }
+            if (response?.error) { reject(new Error(describeError(response.error))); return; }
             resolve(response);
           }
         );
@@ -1515,7 +1518,7 @@ const enrichWithAssetProperties = async (): Promise<void> => {
         logger.info('Enriched OUR items', { apiItems: result.items.length, enriched });
       }
     } catch (err) {
-      logger.warn('Failed to enrich our items', { error: String(err) });
+      logger.warn(`Failed to enrich our items: ${describeError(err)}`);
     }
   }
 
@@ -1569,7 +1572,7 @@ const enrichWithAssetProperties = async (): Promise<void> => {
         }
       }
     } catch (err) {
-      logger.warn('Failed to enrich partner items', { error: String(err) });
+      logger.warn(`Failed to enrich partner items: ${describeError(err)}`);
     }
   }
 
