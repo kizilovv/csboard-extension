@@ -34,6 +34,7 @@ import {
   buildCsfolderInspectUrl,
   decorateAccessoryPrices,
 } from '../../shared/inspect-actions';
+import { INSPECT_3D_PAGE, buildInspect3dHref, openInspect3dDialog } from '../../shared/inspect-3d';
 
 const logger = createLogger('trade-offer');
 
@@ -1748,12 +1749,36 @@ async function init() {
         staticActions.appendChild(a);
       };
 
+      /* The 3D view opens over the page instead of in a tab, so it stays an
+         anchor for keyboard and middle-click, but handles the plain click. */
+      const addDialogLink = (text: string, href: string, onOpen: () => void) => {
+        const a = document.createElement('a');
+        a.textContent = text;
+        a.className = 'popup_menu_item csboard-popup-link';
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.addEventListener('click', (event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          popup.style.display = 'none';
+          onOpen();
+        });
+        staticActions.appendChild(a);
+      };
+
       const cDPhase = item?.dopplerPhase;
       const inspectHref = staticActions.querySelector<HTMLAnchorElement>(
         'a[href*="csgo_econ_action_preview"]',
       )?.href ?? popup.querySelector<HTMLAnchorElement>(
         'a[href*="csgo_econ_action_preview"]',
       )?.href;
+      const viewer3dHref = inspectHref
+        ? buildInspect3dHref(inspectHref, chrome.runtime.getURL(INSPECT_3D_PAGE))
+        : null;
+      if (viewer3dHref) {
+        addDialogLink('View in 3D', viewer3dHref, () => openInspect3dDialog(viewer3dHref, itemName));
+      }
       const screenshotHref = inspectHref ? buildCsfolderInspectUrl(inspectHref) : null;
       if (screenshotHref) addLink('Get screenshot', screenshotHref);
       addLink('Lookup on BUFF', getBuffLink(itemName, cDPhase));

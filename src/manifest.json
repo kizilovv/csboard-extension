@@ -204,7 +204,8 @@
       "resources": [
         "injectToPage/inventoryExtractor.js",
         "injectToPage/ShowTradeOffer.js",
-        "injectToPage/pageVisitor.js"
+        "injectToPage/pageVisitor.js",
+        "pages/inspect-3d.html"
       ],
       "matches": [
         "*://steamcommunity.com/*"

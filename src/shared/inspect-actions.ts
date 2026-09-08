@@ -1,6 +1,9 @@
 const CS2_INSPECT_LINK_RE =
   /^steam:\/\/(?:rungame|run)\/730\/[^/\s]*\/\+csgo_econ_action_preview(?:%20| )(?:[SM]\d+A\d+D\d+|[0-9A-Fa-f]{16,900})$/;
 
+/** The part after the action name: either `S…A…D…` or a hex item certificate. */
+const CS2_INSPECT_TOKEN_RE = /^(?:[SM]\d+A\d+D\d+|[0-9A-Fa-f]{16,900})$/;
+
 const ACCESSORY_NAME_RE =
   /(?:^|\s)((?:Sticker|Patch|Charm)\s*\|\s*.+?)(?=\s*(?:Sticker\s+Scrape\s+Level|Scrape\s+Level|Wear\s*:|$))/i;
 
@@ -9,6 +12,20 @@ export interface AccessoryPrice {
 }
 
 export type AccessoryPriceLookup = (marketHashName: string) => AccessoryPrice | null;
+
+/**
+ * Pull the item's identity out of a Steam inspect link.
+ *
+ * Everything downstream of a link — a render, a 3D view — only needs this
+ * token, and validating it is a far smaller promise to keep than passing a
+ * whole `steam://` URL through another page's query string.
+ */
+export function cs2InspectToken(inspectLink: string): string | null {
+  const normalized = inspectLink.trim();
+  if (!CS2_INSPECT_LINK_RE.test(normalized)) return null;
+  const token = normalized.split(/%20| /).pop() ?? '';
+  return CS2_INSPECT_TOKEN_RE.test(token) ? token : null;
+}
 
 /**
  * CSFolder direct renders keep the complete Steam action in one encoded route

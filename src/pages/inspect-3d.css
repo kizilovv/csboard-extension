@@ -1,0 +1,22 @@
+/* This page is only ever a frame inside the Steam page, so it owns no chrome
+   of its own — the dialog around it draws the title bar and the close button. */
+html, body {
+  height: 100%;
+  margin: 0;
+  background: #10151e;
+}
+
+#viewer {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+#status {
+  margin: 0;
+  padding: 24px;
+  color: #8fa3b8;
+  font: 400 14px/1.4 "Motiva Sans", Arial, sans-serif;
+  text-align: center;
+}
