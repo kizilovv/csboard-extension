@@ -21,6 +21,13 @@ import { getDopplerInfo } from '../../shared/dopplerPhases';
 import { readSteamPageCredential } from '../../shared/steam-page-credential';
 import { sendMessageIfContextAlive } from '../../shared/message-bus';
 import { whenSiteEnabled } from '../../shared/enhancements';
+import {
+  fetchInventoryAssetProperties,
+  hasAnyProperty,
+  readCachedAssetProperties,
+  rememberAssetProperties,
+} from '../../shared/steam-inventory-properties';
+import type { ParsedSteamAssetProperties } from '../../shared/steam-asset-properties';
 
 const logger = createLogger('trade-offers-list');
 
@@ -96,6 +103,8 @@ interface SteamItem {
   side: 'your' | 'their';
   inOffer: string;
   offerOrigin: 'sent' | 'received';
+  /** Steam account id (32-bit) of the trade partner, from the offers read. */
+  accountid_other?: number;
   market_hash_name?: string;
   name?: string;
   type?: string;
@@ -107,6 +116,49 @@ interface SteamItem {
   paintIndex?: number | null;
   [key: string]: unknown;
 }
+
+// Partner float reads: one Steam inventory request per partner, so they are
+// paced rather than fired in a burst. The budget is a page-load ceiling, not a
+// target — normally only the offers the user scrolls to are ever read.
+const PARTNER_ATTRIBUTE = 'data-csboard-partner';
+const PARTNER_READ_GAP_MS = 400;
+const PARTNER_THROTTLE_BACKOFF_MS = 20_000;
+const MAX_PARTNER_READS = 80;
+const MAX_THROTTLE_STRIKES = 3;
+const CACHE_WRITE_DEBOUNCE_MS = 2_000;
+
+const STEAM_ID64_BASE = BigInt('76561197960265728');
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const steamId64FromAccountId = (accountId: unknown): string | null => {
+  const numeric = Number(accountId);
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) return null;
+  return (STEAM_ID64_BASE + BigInt(numeric)).toString();
+};
+
+/** The background's inventory read already parsed properties; reshape only. */
+const normalizeProviderProperties = (apiItem: {
+  floatValue?: unknown;
+  paintSeed?: unknown;
+  defIndex?: unknown;
+  paintIndex?: unknown;
+}): ParsedSteamAssetProperties => {
+  const bounded = (value: unknown): number | undefined => {
+    const numeric = value === null || value === undefined || value === '' ? Number.NaN : Number(value);
+    return Number.isFinite(numeric) && numeric >= 0 && numeric <= 1 ? numeric : undefined;
+  };
+  const whole = (value: unknown): number | undefined => {
+    const numeric = Number(value);
+    return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
+  };
+  return {
+    floatValue: bounded(apiItem.floatValue),
+    paintSeed: whole(apiItem.paintSeed),
+    defIndex: whole(apiItem.defIndex),
+    paintIndex: whole(apiItem.paintIndex),
+  };
+};
 
 const buildCsfloatUrlForOfferItem = (item: SteamItem): string => {
   const marketHashName = item.market_hash_name || item.name || '';
@@ -145,6 +197,17 @@ function findItem(
 
 class TradeOffersListScript {
   private initialized = false;
+
+  /** Asset id → wear/pattern, from cache, our inventory or a partner's. */
+  private assetProperties = new Map<string, ParsedSteamAssetProperties>();
+  private pendingCacheWrites = new Map<string, ParsedSteamAssetProperties>();
+  private cacheWriteTimer: number | null = null;
+  private theirItemsByPartner = new Map<string, SteamItem[]>();
+  private partnerQueue: string[] = [];
+  private queuedPartners = new Set<string>();
+  private partnerWorkerActive = false;
+  private partnerBudget = MAX_PARTNER_READS;
+  private throttleStrikes = 0;
 
   async init() {
     if (this.initialized) return;
@@ -574,12 +637,25 @@ class TradeOffersListScript {
   // Replaces Steam's confirm-dialog decline with instant API call
 
   // --- Enrich items with float via Steam APIs ---
+  //
+  // Our side comes from the token-backed inventory read. The partner's side
+  // used to be left blank here on the theory that a partner inventory needs
+  // trade-page context — it does not: the public community inventory endpoint
+  // serves `asset_properties` for any profile. See steam-inventory-properties.
   private async enrichWithFloat(items: SteamItem[]) {
     // Get our steamid
     const steamIdScript = "document.querySelector('body').setAttribute('mySteamId', typeof g_steamID !== 'undefined' ? g_steamID : '');";
     const mySteamId = injectScript(steamIdScript, true, 'getMySteamId', 'mySteamId');
 
-    let enriched = 0;
+    // A float never changes, so an asset id read on an earlier visit costs
+    // Steam nothing now. This is what keeps a page reload from re-reading
+    // every partner's inventory.
+    try {
+      this.assetProperties = await readCachedAssetProperties();
+    } catch (err) {
+      logger.warn('Could not read the asset property cache', { error: String(err) });
+    }
+    let enriched = this.applyKnownProperties(items);
 
     // 1. Our items — GetInventoryItemsWithDescriptions
     if (mySteamId) {
@@ -598,41 +674,13 @@ class TradeOffersListScript {
           );
         });
         if (result?.items) {
-          const floatMap: Record<string, { fv: number; ps: number | null; defIndex: number | null; paintIndex: number | null }> = {};
           for (const apiItem of result.items) {
-            const rawFloatValue = apiItem.floatValue;
-            const floatValue = rawFloatValue === null || rawFloatValue === undefined || rawFloatValue === ''
-              ? Number.NaN
-              : Number(rawFloatValue);
-            if (Number.isFinite(floatValue) && floatValue >= 0 && floatValue <= 1) {
-              floatMap[apiItem.assetid] = {
-                fv: floatValue,
-                ps: Number.isFinite(Number(apiItem.paintSeed)) ? Number(apiItem.paintSeed) : null,
-                defIndex: Number.isInteger(apiItem.defIndex) ? apiItem.defIndex : null,
-                paintIndex: Number.isInteger(apiItem.paintIndex) ? apiItem.paintIndex : null,
-              };
-            }
+            const assetId = String(apiItem?.assetid ?? '');
+            if (!assetId) continue;
+            const parsed = normalizeProviderProperties(apiItem);
+            if (hasAnyProperty(parsed)) this.assetProperties.set(assetId, parsed);
           }
-          // Apply to DOM
-          for (const item of items) {
-            if (item.side !== 'your') continue;
-            const aid = String(item.assetid ?? '');
-            if (!aid) continue;
-            const fdata = floatMap[aid];
-            if (!fdata) continue;
-            item.floatValue = fdata.fv;
-            item.paintSeed = fdata.ps;
-            item.defIndex = fdata.defIndex;
-            item.paintIndex = fdata.paintIndex;
-            // Find DOM element and add float
-            const el = this.findItemElement(item);
-            if (el && !el.querySelector('.floatIndicator')) {
-              addFloatIndicator(el as HTMLElement, fdata.fv, 4);
-              enriched++;
-            }
-            const csfloatLink = el?.querySelector<HTMLAnchorElement>('.csboard-csfloat-link');
-            if (csfloatLink) csfloatLink.href = buildCsfloatUrlForOfferItem(item);
-          }
+          enriched += this.applyKnownProperties(items.filter((item) => item.side === 'your'));
           logger.info('Enriched OUR items on list', { apiItems: result.items.length, enriched });
         }
       } catch (err) {
@@ -640,12 +688,173 @@ class TradeOffersListScript {
       }
     }
 
-    // Partner float on list page: not feasible (partnerinventory requires trade page context)
-    // Partner float works on individual trade offer pages
+    // 2. Partner items — public inventory reads, queued as offers come into view
+    this.scheduleTheirFloats(items);
 
     if (enriched > 0) {
       logger.info('Float enrichment on trade offers list complete', { enriched });
     }
+  }
+
+  // --- Partner floats -------------------------------------------------
+  // An offers page can list hundreds of distinct partners, and every partner
+  // is one rate-limited Steam inventory request. So a partner is read only
+  // once one of their offers scrolls into view, one request at a time.
+
+  private scheduleTheirFloats(items: SteamItem[]) {
+    for (const item of items) {
+      if (item.side !== 'their') continue;
+      const assetId = String(item.assetid ?? '');
+      if (!assetId || this.assetProperties.has(assetId)) continue;
+
+      const partnerId = steamId64FromAccountId(item.accountid_other);
+      // No element means the offer is inactive or gone; nothing to draw on.
+      if (!partnerId || !this.findItemElement(item)) continue;
+
+      const bucket = this.theirItemsByPartner.get(partnerId);
+      if (bucket) bucket.push(item);
+      else this.theirItemsByPartner.set(partnerId, [item]);
+    }
+
+    if (this.theirItemsByPartner.size === 0) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.unobserve(entry.target);
+        const partnerId = entry.target.getAttribute(PARTNER_ATTRIBUTE);
+        if (partnerId) this.enqueuePartner(partnerId);
+      }
+    }, { rootMargin: '400px' });
+
+    let observed = 0;
+    for (const [partnerId, partnerItems] of this.theirItemsByPartner) {
+      const offerIds = new Set(partnerItems.map((item) => item.inOffer));
+      for (const offerId of offerIds) {
+        const offerEl = document.getElementById(`tradeofferid_${offerId}`);
+        if (!offerEl) continue;
+        offerEl.setAttribute(PARTNER_ATTRIBUTE, partnerId);
+        observer.observe(offerEl);
+        observed += 1;
+      }
+    }
+
+    logger.info('Watching offers for partner floats', {
+      partners: this.theirItemsByPartner.size,
+      offers: observed,
+    });
+  }
+
+  private enqueuePartner(partnerId: string) {
+    if (this.queuedPartners.has(partnerId)) return;
+    if (!this.theirItemsByPartner.has(partnerId)) return;
+    this.queuedPartners.add(partnerId);
+    this.partnerQueue.push(partnerId);
+    void this.runPartnerQueue();
+  }
+
+  private async runPartnerQueue() {
+    if (this.partnerWorkerActive) return;
+    this.partnerWorkerActive = true;
+
+    try {
+      while (this.partnerQueue.length > 0 && this.partnerBudget > 0) {
+        const partnerId = this.partnerQueue.shift();
+        if (!partnerId) continue;
+        const partnerItems = this.theirItemsByPartner.get(partnerId) ?? [];
+        const neededAssetIds = new Set(partnerItems.map((item) => String(item.assetid ?? '')));
+
+        this.partnerBudget -= 1;
+        const outcome = await fetchInventoryAssetProperties(partnerId, { neededAssetIds });
+
+        if (outcome.status === 'throttled') {
+          // Steam asked us to slow down. The partner keeps its place in line
+          // and the whole queue waits — retrying immediately only digs deeper.
+          this.partnerQueue.unshift(partnerId);
+          this.partnerBudget += 1;
+          this.throttleStrikes += 1;
+          if (this.throttleStrikes > MAX_THROTTLE_STRIKES) {
+            logger.warn('Steam keeps throttling inventory reads; partner floats stop here');
+            this.partnerQueue.length = 0;
+            break;
+          }
+          await delay(PARTNER_THROTTLE_BACKOFF_MS);
+          continue;
+        }
+
+        if (outcome.status === 'ok') {
+          let stored = 0;
+          for (const [assetId, parsed] of outcome.properties) {
+            // Only the offer's own items are kept: caching a whole 300-item
+            // inventory per partner would evict everything else.
+            if (!neededAssetIds.has(assetId)) continue;
+            this.assetProperties.set(assetId, parsed);
+            this.pendingCacheWrites.set(assetId, parsed);
+            stored += 1;
+          }
+          const drawn = this.applyKnownProperties(partnerItems);
+          if (stored > 0) this.schedulePropertyCacheWrite();
+          logger.info('Enriched PARTNER items on list', { partnerId, stored, drawn });
+        } else {
+          // Private profile or a hard failure — asking again would repeat it.
+          logger.info('Partner inventory unavailable', { partnerId, status: outcome.status });
+        }
+
+        await delay(PARTNER_READ_GAP_MS);
+      }
+    } finally {
+      this.partnerWorkerActive = false;
+    }
+  }
+
+  private schedulePropertyCacheWrite() {
+    if (this.cacheWriteTimer !== null) return;
+    this.cacheWriteTimer = window.setTimeout(() => {
+      this.cacheWriteTimer = null;
+      const pending = new Map(this.pendingCacheWrites);
+      this.pendingCacheWrites.clear();
+      rememberAssetProperties(pending).catch((err) => {
+        logger.warn('Could not persist asset properties', { error: String(err) });
+      });
+    }, CACHE_WRITE_DEBOUNCE_MS);
+  }
+
+  /** Draw every property already known for these items. Returns floats drawn. */
+  private applyKnownProperties(items: SteamItem[]): number {
+    let drawn = 0;
+    for (const item of items) {
+      const assetId = String(item.assetid ?? '');
+      if (!assetId) continue;
+      const parsed = this.assetProperties.get(assetId);
+      if (!parsed) continue;
+      if (this.applyItemProperties(item, parsed)) drawn += 1;
+    }
+    return drawn;
+  }
+
+  private applyItemProperties(item: SteamItem, parsed: ParsedSteamAssetProperties): boolean {
+    const el = this.findItemElement(item) as HTMLElement | null;
+    if (!el) return false;
+
+    if (parsed.floatValue !== undefined) item.floatValue = parsed.floatValue;
+    if (parsed.paintSeed !== undefined) item.paintSeed = parsed.paintSeed;
+    if (parsed.defIndex !== undefined) item.defIndex = parsed.defIndex;
+    if (parsed.paintIndex !== undefined) item.paintIndex = parsed.paintIndex;
+
+    const alreadyDrawn = el.querySelector('.floatIndicator') !== null;
+    addFloatIndicator(el, item.floatValue, 4);
+    const drewFloat = !alreadyDrawn && el.querySelector('.floatIndicator') !== null;
+
+    // The seed only arrives with this enrichment, so the pattern badge that
+    // addItemInfo could not compute is filled in now.
+    if (typeof item.paintSeed === 'number' && item.market_hash_name) {
+      addPatternIndicator(el, getPattern(item.market_hash_name, item.paintSeed));
+    }
+
+    const csfloatLink = el.querySelector<HTMLAnchorElement>('.csboard-csfloat-link');
+    if (csfloatLink) csfloatLink.href = buildCsfloatUrlForOfferItem(item);
+
+    return drewFloat;
   }
 
   // Find DOM element for a trade offer item

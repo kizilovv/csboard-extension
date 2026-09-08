@@ -402,6 +402,9 @@ export const STORAGE_KEYS = {
   STORAGE_VERSION: 'csboard_storage_version',
   // P2P active trades — polled by alarm for status changes
   P2P_ACTIVE_TRADES: 'csboard_p2p_active_trades',
+  // CS2 wear/pattern per asset id, so a reloaded page does not re-read a
+  // partner's whole Steam inventory for floats it already knows
+  ASSET_PROPERTY_CACHE: 'csboard_asset_property_cache',
 } as const;
 
 export type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];
@@ -431,6 +434,20 @@ export interface StorageSchema {
   [STORAGE_KEYS.LAST_SEEN_BOARD]: string; // ISO timestamp
   [STORAGE_KEYS.STORAGE_VERSION]: number;
   [STORAGE_KEYS.P2P_ACTIVE_TRADES]: P2PActiveTrade[];
+  [STORAGE_KEYS.ASSET_PROPERTY_CACHE]: Record<string, CachedAssetProperties>;
+}
+
+/**
+ * CS2 asset metadata, keyed by asset id and kept deliberately short because
+ * thousands of these share one storage value: `f`loat, pattern `s`eed,
+ * `d`efindex, `p`aintindex, cached-at `t`ime.
+ */
+export interface CachedAssetProperties {
+  f?: number;
+  s?: number;
+  d?: number;
+  p?: number;
+  t: number;
 }
 
 export interface PortfolioSourceSettings {
