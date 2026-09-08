@@ -117,11 +117,14 @@ interface SteamItem {
   [key: string]: unknown;
 }
 
-// Partner float reads: one Steam inventory request per partner, so they are
-// paced rather than fired in a burst. The budget is a page-load ceiling, not a
+// Partner float reads: one Steam inventory request per partner, ~650ms each
+// whatever the inventory's size, so the pacing that matters is how many run at
+// once. Three abreast measured clean on Steam; the gap keeps a long scroll
+// under roughly four reads a second. The budget is a page-load ceiling, not a
 // target — normally only the offers the user scrolls to are ever read.
 const PARTNER_ATTRIBUTE = 'data-csboard-partner';
-const PARTNER_READ_GAP_MS = 400;
+const PARTNER_READ_CONCURRENCY = 3;
+const PARTNER_READ_GAP_MS = 150;
 const PARTNER_THROTTLE_BACKOFF_MS = 20_000;
 const MAX_PARTNER_READS = 80;
 const MAX_THROTTLE_STRIKES = 3;
@@ -205,9 +208,11 @@ class TradeOffersListScript {
   private theirItemsByPartner = new Map<string, SteamItem[]>();
   private partnerQueue: string[] = [];
   private queuedPartners = new Set<string>();
-  private partnerWorkerActive = false;
+  private activePartnerWorkers = 0;
   private partnerBudget = MAX_PARTNER_READS;
   private throttleStrikes = 0;
+  /** Shared deadline: one worker being throttled pauses all of them. */
+  private backoffUntil = 0;
 
   async init() {
     if (this.initialized) return;
@@ -657,7 +662,12 @@ class TradeOffersListScript {
     }
     let enriched = this.applyKnownProperties(items);
 
-    // 1. Our items — GetInventoryItemsWithDescriptions
+    // 1. Partner items first. Our own side comes from a background round trip
+    // that can take seconds, and it is not the half the page was missing —
+    // awaiting it before queueing partners just delayed every partner read.
+    this.scheduleTheirFloats(items);
+
+    // 2. Our items — GetInventoryItemsWithDescriptions
     if (mySteamId) {
       try {
         const result = await new Promise<any>((resolve, reject) => {
@@ -687,9 +697,6 @@ class TradeOffersListScript {
         logger.warn('Failed to enrich our items on list', { error: String(err) });
       }
     }
-
-    // 2. Partner items — public inventory reads, queued as offers come into view
-    this.scheduleTheirFloats(items);
 
     if (enriched > 0) {
       logger.info('Float enrichment on trade offers list complete', { enriched });
@@ -725,7 +732,9 @@ class TradeOffersListScript {
         const partnerId = entry.target.getAttribute(PARTNER_ATTRIBUTE);
         if (partnerId) this.enqueuePartner(partnerId);
       }
-    }, { rootMargin: '400px' });
+      // Read a screen ahead of the scroll, so a float is already there by the
+      // time the offer is actually looked at.
+    }, { rootMargin: '800px' });
 
     let observed = 0;
     for (const [partnerId, partnerItems] of this.theirItemsByPartner) {
@@ -750,15 +759,24 @@ class TradeOffersListScript {
     if (!this.theirItemsByPartner.has(partnerId)) return;
     this.queuedPartners.add(partnerId);
     this.partnerQueue.push(partnerId);
-    void this.runPartnerQueue();
+    this.runPartnerQueue();
   }
 
-  private async runPartnerQueue() {
-    if (this.partnerWorkerActive) return;
-    this.partnerWorkerActive = true;
+  private runPartnerQueue() {
+    while (this.activePartnerWorkers < PARTNER_READ_CONCURRENCY &&
+           this.partnerQueue.length > 0 &&
+           this.partnerBudget > 0) {
+      this.activePartnerWorkers += 1;
+      void this.readPartnerQueue();
+    }
+  }
 
+  private async readPartnerQueue() {
     try {
       while (this.partnerQueue.length > 0 && this.partnerBudget > 0) {
+        const waitMs = this.backoffUntil - Date.now();
+        if (waitMs > 0) await delay(waitMs);
+
         const partnerId = this.partnerQueue.shift();
         if (!partnerId) continue;
         const partnerItems = this.theirItemsByPartner.get(partnerId) ?? [];
@@ -769,7 +787,7 @@ class TradeOffersListScript {
 
         if (outcome.status === 'throttled') {
           // Steam asked us to slow down. The partner keeps its place in line
-          // and the whole queue waits — retrying immediately only digs deeper.
+          // and every worker waits — retrying now only digs deeper.
           this.partnerQueue.unshift(partnerId);
           this.partnerBudget += 1;
           this.throttleStrikes += 1;
@@ -778,7 +796,7 @@ class TradeOffersListScript {
             this.partnerQueue.length = 0;
             break;
           }
-          await delay(PARTNER_THROTTLE_BACKOFF_MS);
+          this.backoffUntil = Date.now() + PARTNER_THROTTLE_BACKOFF_MS;
           continue;
         }
 
@@ -803,7 +821,7 @@ class TradeOffersListScript {
         await delay(PARTNER_READ_GAP_MS);
       }
     } finally {
-      this.partnerWorkerActive = false;
+      this.activePartnerWorkers -= 1;
     }
   }
 
