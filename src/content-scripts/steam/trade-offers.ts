@@ -127,6 +127,9 @@ const PARTNER_READ_CONCURRENCY = 3;
 const PARTNER_READ_GAP_MS = 150;
 const PARTNER_THROTTLE_BACKOFF_MS = 20_000;
 const MAX_PARTNER_READS = 80;
+/* A prefetched read keeps the partner's whole inventory in memory, because the
+   offer's asset ids are not known yet. This bounds that to a few megabytes. */
+const MAX_TRACKED_PROPERTIES = 20_000;
 const MAX_THROTTLE_STRIKES = 3;
 const CACHE_WRITE_DEBOUNCE_MS = 2_000;
 
@@ -203,7 +206,10 @@ class TradeOffersListScript {
 
   /** Asset id → wear/pattern, from cache, our inventory or a partner's. */
   private assetProperties = new Map<string, ParsedSteamAssetProperties>();
+  /** Asset ids that came out of storage — re-persisting them is a wasted write. */
+  private cachedAssetIds = new Set<string>();
   private pendingCacheWrites = new Map<string, ParsedSteamAssetProperties>();
+  private partnerObserver: IntersectionObserver | null = null;
   private cacheWriteTimer: number | null = null;
   private theirItemsByPartner = new Map<string, SteamItem[]>();
   private partnerQueue: string[] = [];
@@ -233,6 +239,13 @@ class TradeOffersListScript {
 
     // 3. Inject ShowTradeOffer override
     injectShowTradeOfferOverride();
+
+    // 3.5. Start reading partner inventories NOW. Steam's own trade-offers API
+    // answers in 1.5-4s, and until this ran after it, every partner float was
+    // stuck behind that. The page's avatars already carry the partner account
+    // ids, which is all a read needs — the offer's asset ids only decide which
+    // of the results get drawn.
+    this.prefetchPartnersFromPage();
 
     // 4. Fetch trade offers via the background's fixed read provider.
     try {
@@ -656,16 +669,18 @@ class TradeOffersListScript {
     // Steam nothing now. This is what keeps a page reload from re-reading
     // every partner's inventory.
     try {
-      this.assetProperties = await readCachedAssetProperties();
+      const cached = await readCachedAssetProperties();
+      for (const [assetId, parsed] of cached) {
+        this.cachedAssetIds.add(assetId);
+        if (!this.assetProperties.has(assetId)) this.assetProperties.set(assetId, parsed);
+      }
     } catch (err) {
       logger.warn('Could not read the asset property cache', { error: String(err) });
     }
-    let enriched = this.applyKnownProperties(items);
 
-    // 1. Partner items first. Our own side comes from a background round trip
-    // that can take seconds, and it is not the half the page was missing —
-    // awaiting it before queueing partners just delayed every partner read.
-    this.scheduleTheirFloats(items);
+    // 1. Partner items: match the reads already in flight to the offer's items,
+    // and watch the rest of the page for what still has to be read.
+    let enriched = this.scheduleTheirFloats(items);
 
     // 2. Our items — GetInventoryItemsWithDescriptions
     if (mySteamId) {
@@ -704,15 +719,57 @@ class TradeOffersListScript {
   }
 
   // --- Partner floats -------------------------------------------------
-  // An offers page can list hundreds of distinct partners, and every partner
-  // is one rate-limited Steam inventory request. So a partner is read only
-  // once one of their offers scrolls into view, one request at a time.
+  // Every partner is one Steam inventory request, and Steam answers those at
+  // roughly four a second no matter how many run at once — so the reads are
+  // queued, and only for the offers the user actually reaches.
 
-  private scheduleTheirFloats(items: SteamItem[]) {
+  /**
+   * Queue the partners whose offers are on screen, straight from the page.
+   * This runs before the offers API answers, which is the whole point: the
+   * account id in each offer's avatar is enough to start reading.
+   */
+  private prefetchPartnersFromPage() {
+    const observer = this.watchOffersForPartners();
+    let watched = 0;
+
+    for (const offerEl of document.querySelectorAll<HTMLElement>('[id^="tradeofferid_"]')) {
+      const ctn = offerEl.querySelector('.tradeoffer_items_ctn');
+      if (!ctn || ctn.classList.contains('inactive')) continue;
+
+      const accountId = offerEl.querySelector('.playerAvatar')?.getAttribute('data-miniprofile');
+      const partnerId = steamId64FromAccountId(accountId);
+      if (!partnerId) continue;
+
+      offerEl.setAttribute(PARTNER_ATTRIBUTE, partnerId);
+      observer.observe(offerEl);
+      watched += 1;
+    }
+
+    logger.info('Watching offers for partner floats', { offers: watched });
+  }
+
+  private watchOffersForPartners(): IntersectionObserver {
+    if (this.partnerObserver) return this.partnerObserver;
+
+    this.partnerObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        this.partnerObserver?.unobserve(entry.target);
+        const partnerId = entry.target.getAttribute(PARTNER_ATTRIBUTE);
+        if (partnerId) this.enqueuePartner(partnerId);
+      }
+      // Read a screen ahead of the scroll, so a float is already there by the
+      // time the offer is actually looked at.
+    }, { rootMargin: '800px' });
+
+    return this.partnerObserver;
+  }
+
+  /** Bind the offers API's items to their partner, then draw what is known. */
+  private scheduleTheirFloats(items: SteamItem[]): number {
     for (const item of items) {
       if (item.side !== 'their') continue;
-      const assetId = String(item.assetid ?? '');
-      if (!assetId || this.assetProperties.has(assetId)) continue;
+      if (!String(item.assetid ?? '')) continue;
 
       const partnerId = steamId64FromAccountId(item.accountid_other);
       // No element means the offer is inactive or gone; nothing to draw on.
@@ -723,40 +780,11 @@ class TradeOffersListScript {
       else this.theirItemsByPartner.set(partnerId, [item]);
     }
 
-    if (this.theirItemsByPartner.size === 0) return;
-
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        observer.unobserve(entry.target);
-        const partnerId = entry.target.getAttribute(PARTNER_ATTRIBUTE);
-        if (partnerId) this.enqueuePartner(partnerId);
-      }
-      // Read a screen ahead of the scroll, so a float is already there by the
-      // time the offer is actually looked at.
-    }, { rootMargin: '800px' });
-
-    let observed = 0;
-    for (const [partnerId, partnerItems] of this.theirItemsByPartner) {
-      const offerIds = new Set(partnerItems.map((item) => item.inOffer));
-      for (const offerId of offerIds) {
-        const offerEl = document.getElementById(`tradeofferid_${offerId}`);
-        if (!offerEl) continue;
-        offerEl.setAttribute(PARTNER_ATTRIBUTE, partnerId);
-        observer.observe(offerEl);
-        observed += 1;
-      }
-    }
-
-    logger.info('Watching offers for partner floats', {
-      partners: this.theirItemsByPartner.size,
-      offers: observed,
-    });
+    return this.applyKnownProperties(items);
   }
 
   private enqueuePartner(partnerId: string) {
     if (this.queuedPartners.has(partnerId)) return;
-    if (!this.theirItemsByPartner.has(partnerId)) return;
     this.queuedPartners.add(partnerId);
     this.partnerQueue.push(partnerId);
     this.runPartnerQueue();
@@ -779,11 +807,9 @@ class TradeOffersListScript {
 
         const partnerId = this.partnerQueue.shift();
         if (!partnerId) continue;
-        const partnerItems = this.theirItemsByPartner.get(partnerId) ?? [];
-        const neededAssetIds = new Set(partnerItems.map((item) => String(item.assetid ?? '')));
 
         this.partnerBudget -= 1;
-        const outcome = await fetchInventoryAssetProperties(partnerId, { neededAssetIds });
+        const outcome = await fetchInventoryAssetProperties(partnerId);
 
         if (outcome.status === 'throttled') {
           // Steam asked us to slow down. The partner keeps its place in line
@@ -801,18 +827,16 @@ class TradeOffersListScript {
         }
 
         if (outcome.status === 'ok') {
-          let stored = 0;
+          // Held in memory for the whole inventory; only the asset ids that
+          // end up drawn on an offer are written to storage.
           for (const [assetId, parsed] of outcome.properties) {
-            // Only the offer's own items are kept: caching a whole 300-item
-            // inventory per partner would evict everything else.
-            if (!neededAssetIds.has(assetId)) continue;
-            this.assetProperties.set(assetId, parsed);
-            this.pendingCacheWrites.set(assetId, parsed);
-            stored += 1;
+            if (this.assetProperties.size >= MAX_TRACKED_PROPERTIES) break;
+            if (!this.assetProperties.has(assetId)) this.assetProperties.set(assetId, parsed);
           }
-          const drawn = this.applyKnownProperties(partnerItems);
-          if (stored > 0) this.schedulePropertyCacheWrite();
-          logger.info('Enriched PARTNER items on list', { partnerId, stored, drawn });
+          const drawn = this.applyKnownProperties(this.theirItemsByPartner.get(partnerId) ?? []);
+          logger.info('Enriched PARTNER items on list', {
+            partnerId, properties: outcome.properties.size, drawn,
+          });
         } else {
           // Private profile or a hard failure — asking again would repeat it.
           logger.info('Partner inventory unavailable', { partnerId, status: outcome.status });
@@ -871,6 +895,12 @@ class TradeOffersListScript {
 
     const csfloatLink = el.querySelector<HTMLAnchorElement>('.csboard-csfloat-link');
     if (csfloatLink) csfloatLink.href = buildCsfloatUrlForOfferItem(item);
+
+    const assetId = String(item.assetid ?? '');
+    if (assetId && !this.cachedAssetIds.has(assetId)) {
+      this.pendingCacheWrites.set(assetId, parsed);
+      this.schedulePropertyCacheWrite();
+    }
 
     return drewFloat;
   }
