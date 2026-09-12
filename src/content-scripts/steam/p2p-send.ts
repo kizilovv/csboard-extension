@@ -70,6 +70,9 @@ async function sendOffer(command: P2PTabSendCommand): Promise<P2PTabSendResult> 
     tradeoffermessage: command.message,
     json_tradeoffer: buildTradeOfferPayload({
       assetId: command.assetId,
+      // One offer per buyer: the background hands the whole batch, and an older
+      // background that does not sends nothing here, which falls back to the one.
+      assetIds: command.assetIds,
       appId: command.appId,
       contextId: command.contextId,
     }),

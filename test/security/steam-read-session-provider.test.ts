@@ -94,10 +94,15 @@ test('Steam trade history uses post-trade ids only for received items', async ()
     instanceId: '0',
     amount: '1',
   });
+  // The post-trade pair is the item's identity; the id it carried in the
+  // GIVER's inventory rides alongside, because that is the id a csboard order
+  // names its skin by and the buyer's history is how a delivery gets proven
+  // when the seller's browser is shut.
   assert.deepEqual(result.trades[0]?.itemsReceived[0], {
     appId: '730',
     contextId: '16',
     assetId: '902',
+    originalAssetId: '202',
     classId: '100',
     instanceId: '0',
     amount: '1',
@@ -285,6 +290,7 @@ test('accepted Steam offers use post-trade ids only for received items', async (
     appId: '730',
     contextId: '16',
     assetId: '904',
+    originalAssetId: '404',
     classId: '100',
     instanceId: '0',
     amount: '1',

@@ -73,6 +73,44 @@ interface PendingSale {
   holdUntil: number | null;
 }
 
+/** One sent offer as the service worker reads it for this tracker. */
+export interface TrackedOffer {
+  offerId: string;
+  state: number;
+  escrowEndAt?: number;
+  /** Steam's `time_updated`, seconds: when the offer reached `state`. */
+  updatedAt?: number;
+  /** Assets the offer hands over; how an offer sent outside csboard is matched to a sale. */
+  givenAssetIds?: readonly string[];
+  /** The other party as a SteamID64. */
+  partnerSteamId?: string;
+}
+
+/**
+ * A purchase this browser's owner is waiting for. Watched from the BUYER's
+ * side: his trade history lists the skin among the assets he received, which
+ * proves the delivery when the seller's browser is closed — the ordinary way
+ * a delivered sale goes silent. csfloat pings from both sides; so does this.
+ */
+interface PendingPurchase {
+  orderId: string;
+  /** The seller's asset id, which Steam keeps on the received item. */
+  assetId: string;
+}
+
+/** A sale the seller accepted but has not sent through csboard (yet). */
+interface UnsentSale {
+  orderId: string;
+  assetId: string;
+  buyerSteamId: string;
+}
+
+/** What one pass did and where it failed, for the heartbeat. */
+export interface TrackOutcome {
+  watched: { sales: number; purchases: number; unsent: number };
+  errors: { offers?: string; history?: string };
+}
+
 /** One completed trade as Steam's history reports it. */
 export interface HistoryTrade {
   tradeId: string;
@@ -145,10 +183,144 @@ async function readPendingSales(): Promise<PendingSale[]> {
   return pending;
 }
 
+/** Seconds or milliseconds from Steam → ISO. Steam's clocks are seconds. */
+function steamTimeIso(value: number | undefined): string | undefined {
+  if (!value || !Number.isFinite(value) || value <= 0) return undefined;
+  const ms = value < 1e12 ? value * 1000 : value;
+  return new Date(ms).toISOString();
+}
+
+/*
+  Sales the seller ACCEPTED and has not sent through csboard.
+  `/p2p/my/sales?scope=delivery` is his send queue. A row here with no offer
+  id is a sale csboard believes is still waiting on him — but sellers send
+  from Steam itself, from another browser, from the phone, and then the offer
+  exists while csboard keeps a two-hour clock running against a delivery that
+  already happened. csfloat's extension annotates such offers "post-hoc" for
+  exactly this reason, and so does this one: see `annotateOffersSentOutside`.
+*/
+async function readUnsentSales(): Promise<UnsentSale[]> {
+  const base = await getApiBase();
+  let response: Response;
+  try {
+    response = await fetch(`${base}/p2p/my/sales?scope=delivery`, {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+  } catch {
+    return [];
+  }
+  if (!response.ok) return [];
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(body) ? body : (body as { sales?: unknown })?.sales;
+  if (!Array.isArray(rows)) return [];
+  const unsent: UnsentSale[] = [];
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const orderId = row['orderId'];
+    const offerId = row['steamTradeOfferId'];
+    const asset = row['assetIdToGive'] ?? row['assetId'];
+    const buyer = row['buyerSteamId64'];
+    // Only a sale he accepted: the backend refuses an annotation on one he has
+    // not, and an offer for a sale he never took is not his delivery.
+    if (!row['sellerAcceptedAt']) continue;
+    if (typeof orderId !== 'string' || (typeof offerId === 'string' && offerId.length > 0)) continue;
+    if (typeof asset !== 'string' || typeof buyer !== 'string' || !/^\d{17}$/.test(buyer)) continue;
+    unsent.push({ orderId, assetId: asset, buyerSteamId: buyer });
+  }
+  return unsent;
+}
+
+/** Purchases with a delivery in flight, from `/p2p/my/orders` (`side: buyer`). */
+async function readPendingPurchases(): Promise<PendingPurchase[]> {
+  const base = await getApiBase();
+  let response: Response;
+  try {
+    response = await fetch(`${base}/p2p/my/orders`, {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+  } catch {
+    return [];
+  }
+  if (!response.ok) return [];
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(body)) return [];
+  const purchases: PendingPurchase[] = [];
+  for (const row of body as Array<Record<string, unknown>>) {
+    if (row['side'] !== 'buyer') continue;
+    const status = row['status'];
+    if (status !== 'trade_pending' && status !== 'trade_sent') continue;
+    const orderId = row['id'];
+    const assetId = row['assetId'];
+    if (typeof orderId !== 'string' || typeof assetId !== 'string' || !assetId) continue;
+    purchases.push({ orderId, assetId });
+  }
+  return purchases;
+}
+
+/** Offer states in which the offer exists and may still deliver or already did. */
+const OFFER_STATES_WORTH_ANNOTATING = new Set([2, 3, 9]); // Active, Accepted, CreatedNeedsConfirmation
+
+/**
+ * Tell csboard about offers the seller sent WITHOUT it.
+ *
+ * Matched on the asset the sale hands over AND the buyer: an offer that gives
+ * that exact copy to that exact account is that sale's delivery, whichever
+ * device made it. The backend runs the same two checks again before it
+ * believes us. A match in state 9 is reported as awaiting Steam Guard, the
+ * same shape the Send button reports.
+ */
+async function annotateOffersSentOutside(
+  unsent: readonly UnsentSale[],
+  offers: ReadonlyArray<TrackedOffer>,
+): Promise<void> {
+  if (unsent.length === 0) return;
+  const base = await getApiBase();
+  for (const sale of unsent) {
+    const offer = offers.find((candidate) => (
+      OFFER_STATES_WORTH_ANNOTATING.has(candidate.state) &&
+      candidate.partnerSteamId === sale.buyerSteamId &&
+      (candidate.givenAssetIds ?? []).includes(sale.assetId)
+    ));
+    if (!offer) continue;
+    try {
+      const response = await fetch(`${base}/p2p/orders/${encodeURIComponent(sale.orderId)}/sent`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          steamTradeOfferId: offer.offerId,
+          givenAssetIds: offer.givenAssetIds ?? [sale.assetId],
+          partnerSteamId: sale.buyerSteamId,
+          needsMobileConfirmation: offer.state === 9,
+        }),
+      });
+      logger.info('Annotated an offer sent outside csboard', {
+        orderId: sale.orderId, offerId: offer.offerId, state: offer.state, ok: response.ok,
+      });
+    } catch (error) {
+      logger.warn('Could not annotate an outside offer', { orderId: sale.orderId, error: String(error) });
+    }
+  }
+}
+
 async function reportState(
   sale: PendingSale,
   state: number,
   escrowEndAt: number | undefined,
+  updatedAt: number | undefined,
 ): Promise<void> {
   const base = await getApiBase();
   /*
@@ -158,6 +330,10 @@ async function reportState(
     hold in 1970 or in the year 57000.
   */
   const tradableAt = escrowEndAt ? new Date(escrowEndAt * 1000).toISOString() : undefined;
+  // For an accepted offer, Steam's `time_updated` is the acceptance itself.
+  // Sent so a report made after the browser was reopened still dates the
+  // hold — and the deadline — from when the buyer actually took the skin.
+  const acceptedAt = state === 3 ? steamTimeIso(updatedAt) : undefined;
   try {
     await fetch(`${base}/p2p/ext/trade-status`, {
       method: 'POST',
@@ -168,6 +344,7 @@ async function reportState(
         steamTradeOfferId: sale.steamTradeOfferId,
         state,
         ...(tradableAt ? { tradableAt } : {}),
+        ...(acceptedAt ? { acceptedAt } : {}),
       }),
     });
   } catch (error) {
@@ -192,7 +369,7 @@ async function reportState(
   reason the offer state is: the server owns what each value means, and a client
   that interpreted them would be a second opinion about somebody's money.
 */
-async function reportHistory(sale: PendingSale, trade: HistoryTrade): Promise<void> {
+async function reportHistory(sale: { orderId: string }, trade: HistoryTrade): Promise<void> {
   const base = await getApiBase();
   try {
     await fetch(`${base}/p2p/ext/trade-history`, {
@@ -206,6 +383,9 @@ async function reportHistory(sale: PendingSale, trade: HistoryTrade): Promise<vo
         receivedAssetIds: trade.receivedAssetIds,
         status: trade.status,
         otherSteamId: trade.partnerSteamId,
+        // Steam's `time_init`: when the skin actually moved. The one fact that
+        // can say "before you closed the order" on a late report.
+        ...(steamTimeIso(trade.occurredAt) ? { occurredAt: steamTimeIso(trade.occurredAt) } : {}),
       }),
     });
   } catch (error) {
@@ -221,7 +401,7 @@ async function reportHistory(sale: PendingSale, trade: HistoryTrade): Promise<vo
  * already owns the provider's lifetime and its account binding.
  */
 export async function trackP2PTrades(
-  readOffers: () => Promise<ReadonlyArray<{ offerId: string; state: number; escrowEndAt?: number }>>,
+  readOffers: () => Promise<ReadonlyArray<TrackedOffer>>,
   /*
     The history half is told WHAT IT IS LOOKING FOR, so the read can stop as
     soon as it has found it.
@@ -235,20 +415,32 @@ export async function trackP2PTrades(
   readHistory?: (
     want: { assetIds: readonly string[]; notBefore: number },
   ) => Promise<ReadonlyArray<HistoryTrade>>,
-): Promise<void> {
+): Promise<TrackOutcome> {
   const pending = await readPendingSales();
+  const unsent = await readUnsentSales();
+  const purchases = await readPendingPurchases();
+  const outcome: TrackOutcome = {
+    watched: { sales: pending.length, purchases: purchases.length, unsent: unsent.length },
+    errors: {},
+  };
   // The pace follows the work — see `pacePeriodMinutes`. Done before the early
   // return so an empty watch list also drops the loop back to hourly.
-  registerP2PTrackAlarm(pacePeriodMinutes(pending));
-  if (pending.length === 0) return;
+  registerP2PTrackAlarm(pacePeriodMinutes(pending, unsent, purchases));
+  if (pending.length === 0 && unsent.length === 0 && purchases.length === 0) return outcome;
 
-  let offers: ReadonlyArray<{ offerId: string; state: number; escrowEndAt?: number }>;
+  let offers: ReadonlyArray<TrackedOffer>;
   try {
     offers = await readOffers();
   } catch (error) {
     logger.warn('Could not read Steam offers', { error: String(error) });
-    return;
+    outcome.errors.offers = String(error).slice(0, 300);
+    return outcome;
   }
+
+  // First the sales csboard does not yet know were sent: the send clock is
+  // running against them, and every minute matters more there than anywhere.
+  await annotateOffersSentOutside(unsent, offers);
+  if (pending.length === 0 && purchases.length === 0) return outcome;
 
   const byOfferId = new Map(offers.map((offer) => [offer.offerId, offer]));
   for (const sale of pending) {
@@ -257,7 +449,7 @@ export async function trackP2PTrades(
     // the window Steam returns, and inventing a state for it would be a claim
     // about someone's money that this browser cannot support.
     if (!offer) continue;
-    await reportState(sale, offer.state, offer.escrowEndAt);
+    await reportState(sale, offer.state, offer.escrowEndAt, offer.updatedAt);
   }
 
   /*
@@ -270,7 +462,7 @@ export async function trackP2PTrades(
     A sale whose asset we do not know is skipped rather than guessed at — a
     wrong match here would report someone else's trade against this order.
   */
-  if (!readHistory) return;
+  if (!readHistory) return outcome;
   /*
     What the read has to cover, derived rather than assumed.
 
@@ -286,12 +478,15 @@ export async function trackP2PTrades(
   */
   const WINDOW_MS = 9 * 24 * 60 * 60_000;
   const now = Date.now();
-  const wantedAssets = pending
-    .map((sale) => sale.assetId)
-    .filter((assetId): assetId is string => !!assetId);
+  const wantedAssets = [
+    ...pending.map((sale) => sale.assetId).filter((assetId): assetId is string => !!assetId),
+    ...purchases.map((purchase) => purchase.assetId),
+  ];
   const notBefore = pending.reduce(
     (oldest, sale) => Math.min(oldest, (sale.holdUntil ?? now) - WINDOW_MS),
-    now,
+    // A purchase in flight was accepted recently or not at all: the same window
+    // from now covers it.
+    purchases.length > 0 ? now - WINDOW_MS : now,
   );
 
   let history: ReadonlyArray<HistoryTrade>;
@@ -299,9 +494,10 @@ export async function trackP2PTrades(
     history = await readHistory({ assetIds: wantedAssets, notBefore });
   } catch (error) {
     logger.warn('Could not read Steam trade history', { error: String(error) });
-    return;
+    outcome.errors.history = String(error).slice(0, 300);
+    return outcome;
   }
-  if (history.length === 0) return;
+  if (history.length === 0) return outcome;
 
   /*
     Newest row per asset, decided by TIME rather than by position.
@@ -314,10 +510,15 @@ export async function trackP2PTrades(
     the one event this whole mechanism exists to catch.
   */
   const byGivenAsset = new Map<string, HistoryTrade>();
+  const byReceivedAsset = new Map<string, HistoryTrade>();
   for (const trade of history) {
     for (const assetId of trade.givenAssetIds) {
       const held = byGivenAsset.get(assetId);
       if (!held || trade.occurredAt > held.occurredAt) byGivenAsset.set(assetId, trade);
+    }
+    for (const assetId of trade.receivedAssetIds) {
+      const held = byReceivedAsset.get(assetId);
+      if (!held || trade.occurredAt > held.occurredAt) byReceivedAsset.set(assetId, trade);
     }
   }
   for (const sale of pending) {
@@ -325,6 +526,54 @@ export async function trackP2PTrades(
     const trade = byGivenAsset.get(sale.assetId);
     if (!trade) continue;
     await reportHistory(sale, trade);
+  }
+  // The buyer's side of the same fact: the skin arrived.
+  for (const purchase of purchases) {
+    const trade = byReceivedAsset.get(purchase.assetId);
+    if (!trade) continue;
+    await reportHistory(purchase, trade);
+  }
+  return outcome;
+}
+
+/**
+ * The heartbeat: what this browser is, what it may read, what it watches and
+ * where the last pass failed. csfloat's `/v1/me/extension/status`, and for the
+ * same reason — `extensionLastSeenAt` says a client called, not whether the
+ * call could see Steam. A seller whose token has died shows up here as
+ * `tokenOk: false` with the read error, hours before a sale goes silent.
+ */
+export async function reportExtensionStatus(report: {
+  version: string;
+  steamId: string | null;
+  tokenOk: boolean | null;
+  permissions: Record<string, boolean>;
+  outcome: TrackOutcome | null;
+  lastPassAt: number | null;
+  nextPassAt: number | null;
+}): Promise<void> {
+  const base = await getApiBase();
+  try {
+    await fetch(`${base}/p2p/ext/status`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version: report.version,
+        steamId: report.steamId,
+        tokenOk: report.tokenOk,
+        permissions: report.permissions,
+        errors: {
+          offers: report.outcome?.errors.offers ?? null,
+          history: report.outcome?.errors.history ?? null,
+        },
+        watched: report.outcome?.watched ?? { sales: 0, purchases: 0, unsent: 0 },
+        lastPassAt: report.lastPassAt ? new Date(report.lastPassAt).toISOString() : null,
+        nextPassAt: report.nextPassAt ? new Date(report.nextPassAt).toISOString() : null,
+      }),
+    });
+  } catch (error) {
+    logger.warn('Could not report extension status', { error: String(error) });
   }
 }
 
@@ -374,7 +623,16 @@ export async function catchUpP2PTracking(run: () => Promise<void>): Promise<void
   Nothing to watch at all is also slow: the next sale will arrive through the
   send path, which reports immediately, not through this loop.
 */
-function pacePeriodMinutes(pending: readonly PendingSale[]): number {
+function pacePeriodMinutes(
+  pending: readonly PendingSale[],
+  unsent: readonly UnsentSale[] = [],
+  purchases: readonly PendingPurchase[] = [],
+): number {
+  // A sale waiting to be sent has a two-hour clock on it; if the seller sends
+  // it from Steam itself, this loop is how csboard finds out. Fast. A purchase
+  // in flight is the other party's clock, and this browser may be the only
+  // one that can report it.
+  if (unsent.length > 0 || purchases.length > 0) return TRACK_PERIOD_FAST_MINUTES;
   if (pending.length === 0) return TRACK_PERIOD_SLOW_MINUTES;
   const now = Date.now();
   const urgent = pending.some((sale) => (

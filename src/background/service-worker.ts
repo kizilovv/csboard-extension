@@ -12,7 +12,9 @@ import {
   catchUpP2PTracking,
   P2P_TRACK_ALARM,
   registerP2PTrackAlarm,
+  reportExtensionStatus,
   trackP2PTrades,
+  type TrackOutcome,
 } from './p2p-trade-tracker';
 import { runP2PCancellations } from './p2p-trade-cancel';
 import {
@@ -2184,8 +2186,9 @@ async function runP2PTrackingPass(): Promise<void> {
     is the step that keeps a skin from leaving for money that went back. It must
     not be starved by the half that only informs.
   */
+  let trackOutcome: TrackOutcome | null = null;
   try {
-    await trackP2PTrades(
+    trackOutcome = await trackP2PTrades(
       /*
         `readTradeOffersForDisplay`, NOT `readTradeOffers`.
 
@@ -2207,6 +2210,13 @@ async function runP2PTrackingPass(): Promise<void> {
           offerId: offer.tradeofferid,
           state: offer.trade_offer_state,
           ...(offer.escrow_end_date !== undefined ? { escrowEndAt: offer.escrow_end_date } : {}),
+          // Steam's clock, so a report made after the browser was reopened can
+          // still say WHEN the buyer accepted, not merely that he did.
+          ...(offer.time_updated !== undefined ? { updatedAt: offer.time_updated } : {}),
+          // What the offer hands over and to whom: how an offer the seller sent
+          // from Steam itself, outside csboard, is matched to his sale.
+          givenAssetIds: offer.items_to_give.map((item) => item.assetid),
+          partnerSteamId: steam64FromAccountId(offer.accountid_other),
         }));
       },
       /*
@@ -2283,7 +2293,10 @@ async function runP2PTrackingPass(): Promise<void> {
 
           for (const trade of result.trades) {
             const given = trade.itemsGiven.map((item) => item.assetId);
-            const received = trade.itemsReceived.map((item) => item.assetId);
+            // Received items by the id the SELLER held them under: that is the
+            // id a csboard order carries, and how a buyer's history proves his
+            // purchase arrived.
+            const received = trade.itemsReceived.map((item) => item.originalAssetId ?? item.assetId);
             rows.push({
               tradeId: trade.tradeId,
               status: result.statuses[trade.tradeId] ?? 0,
@@ -2331,6 +2344,26 @@ async function runP2PTrackingPass(): Promise<void> {
   }
 
   try {
+    // The heartbeat rides on the same pass, after it, with what the pass saw.
+    const [community, steamApi, alarm] = await Promise.all([
+      chrome.permissions.contains({ origins: ['*://steamcommunity.com/*'] }).catch(() => false),
+      chrome.permissions.contains({ origins: ['*://api.steampowered.com/*'] }).catch(() => false),
+      chrome.alarms.get(P2P_TRACK_ALARM).catch(() => undefined),
+    ]);
+    await reportExtensionStatus({
+      version: chrome.runtime.getManifest().version,
+      steamId: steamReadProviderAccount ?? null,
+      tokenOk: provider.hasUsableAccessToken?.() ?? null,
+      permissions: { steamCommunity: community, steamApi },
+      outcome: trackOutcome,
+      lastPassAt: Date.now(),
+      nextPassAt: alarm?.scheduledTime ?? null,
+    });
+  } catch (error) {
+    logger.warn('Extension status report failed', { error: String(error) });
+  }
+
+  try {
     await runP2PCancellations(async () => {
       // Same reader, same reason: a cancelled offer is state 6, and the
       // portfolio reader would have thrown it away before we could see it die.
@@ -2370,6 +2403,15 @@ async function registerAlarms() {
     newsworthy. See p2p-sales-badge.ts.
   */
   registerSalesBadgeAlarm(5);
+}
+
+/**
+ * Steam's `accountid_other` on an offer is the 32-bit account id; the sale
+ * knows its buyer as a SteamID64. Same arithmetic as p2p-send-protocol.
+ */
+function steam64FromAccountId(accountId: string): string {
+  if (!/^[0-9]{1,10}$/.test(accountId)) return '';
+  return (BigInt(accountId) + 76561197960265728n).toString();
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {

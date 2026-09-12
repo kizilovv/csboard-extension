@@ -177,6 +177,13 @@ export interface PortfolioStickerDto {
 }
 
 export interface PortfolioTradeItemDto {
+  /**
+   * For a RECEIVED item: the id it had in the giver's inventory, next to the
+   * new one Steam assigned on arrival. A csboard order names the seller's copy
+   * by that original id, and it is how a buyer's trade history is matched to
+   * his purchase.
+   */
+  readonly originalAssetId?: string;
   readonly appId: '730';
   readonly contextId: string;
   readonly assetId: string;

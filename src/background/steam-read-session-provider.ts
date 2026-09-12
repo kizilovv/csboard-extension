@@ -139,6 +139,8 @@ export interface SteamOfferDisplayOffer {
   readonly accountid_other: string;
   readonly trade_offer_state: number;
   readonly time_created: number;
+  /** Steam's own clock for the last state change — when an accepted offer was accepted. Seconds. */
+  readonly time_updated?: number;
   readonly expiration_time?: number;
   readonly escrow_end_date?: number;
   readonly direction: 'sent' | 'received';
@@ -490,6 +492,9 @@ function normalizeTradeItem(
     assetId: useReceivedIdentity
       ? newAssetId
       : requiredDigits(asset['assetid'], `${path}.assetid`),
+    ...(useReceivedIdentity
+      ? { originalAssetId: requiredDigits(asset['assetid'], `${path}.assetid`) }
+      : {}),
     classId,
     instanceId,
     amount: requiredDigits(asset['amount'] ?? '1', `${path}.amount`),
@@ -991,6 +996,9 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           accountid_other: optionalString(offer['accountid_other'], 12) ?? '',
           trade_offer_state: optionalInteger(offer['trade_offer_state']) ?? 0,
           time_created: optionalInteger(offer['time_created']) ?? 0,
+          ...(optionalInteger(offer['time_updated']) !== undefined
+            ? { time_updated: optionalInteger(offer['time_updated']) }
+            : {}),
           ...(optionalInteger(offer['expiration_time']) !== undefined
             ? { expiration_time: optionalInteger(offer['expiration_time']) }
             : {}),

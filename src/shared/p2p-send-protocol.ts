@@ -91,6 +91,18 @@ export interface P2PSendInstruction {
   partnerSteamId: string;
   message: string;
   secondsRemaining: number;
+  /**
+   * Every order the backend wants in THIS offer, primary first.
+   *
+   * Ten cases bought from one seller used to become ten Steam offers — ten Guard
+   * confirmations, and a seller reporting that half of them refused to go
+   * (2026-09-09). One offer carries them all.
+   *
+   * Optional because a backend that predates it sends nothing here, and this
+   * extension must keep working against one: absent means "just the primary
+   * order", which is exactly the old behaviour.
+   */
+  batch?: Array<{ orderId: string; assetId: string }>;
 }
 
 /** Background → tab. Deliberately flat: the tab decides nothing. */
@@ -98,6 +110,8 @@ export interface P2PTabSendCommand {
   type: typeof P2P_TAB_SEND_COMMAND;
   orderId: string;
   assetId: string;
+  /** Every asset for this offer. Absent on an old background script: use assetId. */
+  assetIds?: string[];
   appId: number;
   contextId: string;
   /** SteamID64 of the buyer, as Steam's `partner` field wants it. */
@@ -213,11 +227,13 @@ export function buildTradeOfferBody(input: {
  */
 export function buildTradeOfferPayload(input: {
   assetId: string;
+  /** Every asset for this offer. Absent means the single `assetId`. */
+  assetIds?: readonly string[];
   appId: number;
   contextId: string;
 }): string {
   return buildTradeOfferBody({
-    giveAssetIds: [input.assetId],
+    giveAssetIds: input.assetIds?.length ? input.assetIds : [input.assetId],
     appId: input.appId,
     contextId: input.contextId,
   });

@@ -132,21 +132,30 @@ async function reportSent(
   result: Extract<P2PTabSendResult, { ok: true }>,
 ): Promise<void> {
   const base = await getApiBase();
-  const response = await fetch(`${base}/p2p/ext/annotate-trade`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      orderId: instruction.orderId,
-      steamTradeOfferId: result.steamTradeOfferId,
-      // The backend refuses this report if the order's own asset is not in the
-      // list, which is the check that survives even a compromised extension.
-      givenAssetIds: [instruction.assetId],
-      partnerSteamId: instruction.partnerSteamId,
-      needsMobileConfirmation: result.needsMobileConfirmation,
-      needsEmailConfirmation: result.needsEmailConfirmation,
-    }),
-  });
+  const batch = batchOf(instruction);
+  // The backend refuses a report if the order's own asset is not in the list,
+  // which is the check that survives even a compromised extension. One offer
+  // holding several orders sends the WHOLE list, so every order finds its own.
+  const givenAssetIds = batch.map((entry) => entry.assetId);
+  const single = batch.length === 1;
+  const response = await fetch(
+    `${base}/p2p/ext/${single ? 'annotate-trade' : 'annotate-trade-batch'}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(single
+          ? { orderId: instruction.orderId }
+          : { orderIds: batch.map((entry) => entry.orderId) }),
+        steamTradeOfferId: result.steamTradeOfferId,
+        givenAssetIds,
+        partnerSteamId: instruction.partnerSteamId,
+        needsMobileConfirmation: result.needsMobileConfirmation,
+        needsEmailConfirmation: result.needsEmailConfirmation,
+      }),
+    },
+  );
   if (!response.ok) {
     // The offer IS sent — Steam has it. Failing to record that is our problem,
     // not the seller's, and it must not be reported to him as a send failure:
@@ -204,6 +213,25 @@ async function readSessionId(): Promise<string | null> {
   reason we did not was the assumption, written into this file's header, that a
   service worker could not hold those three things convincingly. It can.
 */
+/**
+ * Every order this offer carries, primary first.
+ *
+ * The backend decides the grouping — same seller, same buyer, same trade URL,
+ * each one locked — so this only reads it, and falls back to the single order
+ * when talking to a backend that predates the field.
+ */
+function batchOf(instruction: P2PSendInstruction): Array<{ orderId: string; assetId: string }> {
+  const batch = instruction.batch?.length
+    ? instruction.batch
+    : [{ orderId: instruction.orderId, assetId: instruction.assetId }];
+  // The primary order's asset must be in the offer whatever the backend said:
+  // it is the one the annotate check will look for, and an offer without it is
+  // refused after the items have already left.
+  return batch.some((entry) => entry.assetId === instruction.assetId)
+    ? batch
+    : [{ orderId: instruction.orderId, assetId: instruction.assetId }, ...batch];
+}
+
 async function sendFromBackground(
   instruction: P2PSendInstruction,
   partner: { partnerSteamId: string; partnerToken: string },
@@ -215,12 +243,37 @@ async function sendFromBackground(
     sessionId,
     partnerSteamId: partner.partnerSteamId,
     partnerToken: partner.partnerToken,
-    assetId: instruction.assetId,
+    giveAssetIds: batchOf(instruction).map((entry) => entry.assetId),
     appId: instruction.appId,
     contextId: instruction.contextId,
     message: instruction.message,
     // No referer: fetch cannot set it, the declarative rule does.
   });
+}
+
+/**
+ * Tell the backend why a send did not go out.
+ *
+ * The classifier folds every Steam refusal it does not recognise into
+ * STEAM_REFUSED and keeps the original wording in `detail` — and that wording
+ * used to die in this browser. A seller then reports "it will not send", and the
+ * only party who ever saw Steam's reason is the one who cannot read code.
+ *
+ * Fire-and-forget on purpose: this is a note about a failure, and it must never
+ * turn one failure into two.
+ */
+async function reportFailure(orderId: string, outcome: { code: string; detail?: string }): Promise<void> {
+  try {
+    const base = await getApiBase();
+    await fetch(`${base}/p2p/ext/send-failed`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, code: outcome.code, detail: outcome.detail?.slice(0, 1000) }),
+    });
+  } catch {
+    // Offline, signed out, backend down — none of it changes what the seller sees.
+  }
 }
 
 export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutcome> {
@@ -254,7 +307,10 @@ export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutc
     fall through.
   */
   const worthATab = direct.code === 'NO_STEAM_SESSION' || direct.code === 'UNKNOWN';
-  if (!worthATab) return direct;
+  if (!worthATab) {
+    await reportFailure(instruction.orderId, direct);
+    return direct;
+  }
   logger.warn('Background send did not go through, falling back to the trade tab', {
     orderId,
     code: direct.code,
@@ -268,6 +324,7 @@ export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutc
       type: P2P_TAB_SEND_COMMAND,
       orderId: instruction.orderId,
       assetId: instruction.assetId,
+      assetIds: batchOf(instruction).map((entry) => entry.assetId),
       appId: instruction.appId,
       contextId: instruction.contextId,
       partnerSteamId: partner.partnerSteamId,
@@ -275,7 +332,10 @@ export async function sendP2PTradeForOrder(orderId: string): Promise<P2PSendOutc
       message: instruction.message,
     });
 
-    if (!result.ok) return result;
+    if (!result.ok) {
+      await reportFailure(instruction.orderId, result);
+      return result;
+    }
 
     await reportSent(instruction, result);
 

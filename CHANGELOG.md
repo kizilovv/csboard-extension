@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.1.25
+
+- Trade tracking now tells csboard WHEN, not only what. Status reports of an
+  accepted offer carry Steam's `time_updated` and history reports carry
+  `time_init`, so a browser reopened hours after the buyer accepted still dates
+  the delivery from the trade itself. On 2026-09-12 a sale was closed for
+  "offer never confirmed" while the skin had been with the buyer for two hours,
+  because the only clock csboard had was the moment it finally heard.
+- Offers sent outside csboard are recognised. The tracker reads the send queue
+  as well as the watch list, and an Active, Accepted or Guard-pending offer that
+  hands the sale's asset to the sale's buyer is annotated against that sale,
+  the way the Send button would have — the same post-hoc annotation csfloat's
+  extension does. A seller who sends from Steam on his phone no longer runs a
+  two-hour clock against a delivery that already happened.
+- Purchases are watched too. The tracker reads the buyer's own trade history
+  for every purchase in flight and reports the row that shows the skin arrived,
+  by the id the seller held it under. When the seller's browser is closed —
+  the ordinary way a delivered sale went silent — the buyer's browser is now
+  the witness, as it is with csfloat's extension.
+- A heartbeat after every tracking pass: version, whether the Steam token is
+  usable, host permissions, what is being watched and where the last pass
+  failed, filed to `/p2p/ext/status`. csboard used to know only that the
+  extension had called; now it knows whether the call could see anything.
+
+## 1.1.24
+
+- A failed send now tells the backend why. `classifySteamError` folds every
+  refusal it does not recognise into `STEAM_REFUSED` and keeps Steam's own
+  wording in `detail` — and that wording died in the browser. On 2026-09-09 a
+  seller reported five of ten cases would not send; the only party that had ever
+  seen Steam's reason was his browser, so answering "why" meant reading code and
+  guessing. It posts to `/p2p/ext/send-failed`, fire-and-forget, because a note
+  about a failure must never turn one failure into two.
+
+## 1.1.23
+
+- Everything one buyer takes from one seller now goes in a SINGLE trade offer.
+  Each lot is its own order, and every order used to become its own Steam offer:
+  a buyer who took ten Fracture Cases produced ten offers, ten Guard
+  confirmations, and a seller reporting on 2026-09-09 that he had sent five and
+  the rest would not go at all. The pieces to do better were already here —
+  `postTradeOffer` has always accepted a list of assets and was simply handed a
+  list of one.
+
+  The backend decides the grouping, not the extension: it returns every order
+  that shares the seller, the buyer and the exact trade URL, each one locked so
+  two clicks cannot produce two offers for the same asset. Same buyer is not the
+  same destination — an order from an outside marketplace carries its own trade
+  URL and the token can rotate between purchases — so a sibling whose URL
+  differs is left for its own send.
+
+  Reporting follows the offer: one call to `annotate-trade-batch` covers every
+  order in it, and the backend answers per order rather than as a unit. By the
+  time anything is reported the items have already left the inventory, so
+  refusing the whole report because one order went sideways would leave the rest
+  unannotated and heading for a no-send penalty on goods that were delivered.
+
+  Both ends stay compatible in both directions: an older backend sends no batch
+  and this extension sends the single order exactly as before, and an older
+  extension ignores the new field.
+
 ## 1.1.22
 
 - The trade offers list shows the other side's float, not only ours. Steam
