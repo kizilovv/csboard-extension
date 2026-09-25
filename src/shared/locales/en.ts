@@ -30,6 +30,11 @@ export const en = {
   'sites.buff': 'Buff163',
   'notifications.sales': 'Sale alerts',
 
+  // Steam login in this browser (popup banner + toolbar tooltip)
+  'steamSession.title': 'Log into Steam in this browser',
+  'steamSession.body': "The extension sends and checks trades through this browser's Steam login.",
+  'steamSession.action': 'Log into Steam',
+
   // Prices
   'prices.title': 'Prices',
   'prices.pull': 'Sync',

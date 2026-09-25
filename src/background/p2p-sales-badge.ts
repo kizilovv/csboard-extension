@@ -25,11 +25,24 @@
   about what this extension draws on other people's pages; this is its own icon
   telling its owner that money is waiting on him, and it is the same reason
   delivery keeps running when the decorations are off.
+
+  ── ONE ICON, TWO THINGS TO SAY ───────────────────────────────────────────
+
+  Since 1.1.26 the icon also warns when this browser has no Steam login: a "!"
+  on the same amber. The two never share the badge. A sale wins whenever there
+  is one, because it is money waiting on the seller right now and its number is
+  the only place he sees it; the missing login is still in the tooltip and at
+  the top of the popup. The "!" shows only while the count is zero, and when
+  the login comes back the count this module last painted is put back without
+  asking csboard again. Both paths go through `render`, so there is one place
+  that decides what the icon says.
 */
 
 import { getApiBase, SITE_BASE } from '../shared/config';
+import { initI18n, t } from '../shared/i18n';
 import { createLogger } from '../shared/logger';
 import { getSettings } from '../shared/storage';
+import { readSteamSessionState, type SteamSessionState } from '../shared/steam-session-state';
 
 const logger = createLogger('p2p-badge');
 
@@ -146,28 +159,105 @@ async function readActionableSales(): Promise<ActionableSale[] | null> {
   return sales;
 }
 
+/*
+  The count this module last painted, so the icon can be repainted when the
+  Steam-login warning changes without asking csboard again.
+
+  Session storage, not local: it should live exactly as long as the badge does,
+  which Chrome clears on a browser restart, while a service-worker restart in
+  between must not forget it. The module variable is only the fast path.
+*/
+const PAINTED_COUNT_KEY = 'csboard_p2p_sales_badge_count';
+let paintedCount: number | null = null;
+
+async function readPaintedCount(): Promise<number> {
+  if (paintedCount !== null) return paintedCount;
+  try {
+    const stored = await chrome.storage.session.get(PAINTED_COUNT_KEY);
+    const value = stored?.[PAINTED_COUNT_KEY];
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value;
+  } catch {
+    // Nothing remembered: repaint as "no sales", the same thing a fresh browser shows.
+  }
+  return 0;
+}
+
 async function paint(count: number): Promise<void> {
+  paintedCount = count;
+  try {
+    await chrome.storage.session.set({ [PAINTED_COUNT_KEY]: count });
+  } catch {
+    // This worker still remembers it; only a restart before the next pass forgets.
+  }
+  await queueRender();
+}
+
+/**
+ * Repaint from what is already known. Called when the Steam-login state
+ * changes: the sales count does not need a network round trip to come back.
+ */
+export function repaintActionBadge(): Promise<void> {
+  return queueRender();
+}
+
+/*
+  One render at a time, each reading both inputs when its turn comes.
+
+  The sales pass and the Steam check run on separate clocks and can land
+  together; two renders interleaving their awaits could put a count read
+  before the other's write on the icon last. Queued, the last render always
+  sees the latest of both.
+*/
+let renderChain: Promise<void> = Promise.resolve();
+
+function queueRender(): Promise<void> {
+  const job = renderChain.then(async () => {
+    const [count, steam] = await Promise.all([readPaintedCount(), readSteamSessionState()]);
+    await render(count, steam.state);
+  });
+  renderChain = job.catch(() => undefined);
+  return job;
+}
+
+async function steamSessionHint(): Promise<string> {
+  // The worker has no popup to have set the language, so it resolves it the
+  // same way the popup does: stored preference, then the browser's.
+  try {
+    await initI18n();
+  } catch {
+    // English is the fallback dictionary.
+  }
+  return t('steamSession.title');
+}
+
+async function render(count: number, steam: SteamSessionState): Promise<void> {
   /*
     An empty string is the only thing that CLEARS a badge — '0' would leave a
     zero sitting on the icon forever, which reads as broken rather than as
     nothing to do.
   */
   const text = count > 0 ? (count > 99 ? '99+' : String(count)) : '';
+  // `unknown` says nothing: an install that has not looked yet is not an alarm.
+  const steamMissing = steam === 'missing';
   try {
-    await chrome.action.setBadgeText({ text });
-    if (count > 0) {
+    await chrome.action.setBadgeText({ text: text || (steamMissing ? '!' : '') });
+    if (count > 0 || steamMissing) {
       await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
       // Chrome 110+. Older builds ignore it; other browsers do not have it at
       // all, and neither case is worth failing the refresh over.
       await chrome.action.setBadgeTextColor?.({ color: '#000000' });
     }
+    const salesTitle = count > 0
+      ? `CSBOARD — ${count} ${count === 1 ? 'sale needs' : 'sales need'} you`
+      : '';
+    const steamHint = steamMissing ? await steamSessionHint() : '';
     await chrome.action.setTitle({
-      title: count > 0
-        ? `CSBOARD — ${count} ${count === 1 ? 'sale needs' : 'sales need'} you`
-        : 'CSBOARD settings',
+      title: salesTitle && steamHint
+        ? `${salesTitle}. ${steamHint}`
+        : salesTitle || steamHint || 'CSBOARD settings',
     });
   } catch (error) {
-    logger.warn('Could not paint the sales badge', { error: String(error) });
+    logger.warn('Could not paint the toolbar badge', { error: String(error) });
   }
 }
 

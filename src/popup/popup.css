@@ -173,6 +173,27 @@ main {
   flex: 0 0 auto;
 }
 
+/*
+  The only card with a colour of its own, because it is the one state that
+  stops selling outright. Amber like the toolbar "!" and the warning notice;
+  not red, since a single sign-in fixes it.
+*/
+.steam-alert {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  border-color: rgba(243, 181, 74, 0.35);
+  background: #211c14;
+}
+
+.steam-alert .card-title {
+  color: var(--amber);
+}
+
+.steam-alert .supporting-text {
+  margin: 0 0 6px;
+}
+
 .section-heading-row {
   display: flex;
   align-items: flex-start;

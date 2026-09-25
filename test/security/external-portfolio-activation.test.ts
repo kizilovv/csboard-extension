@@ -114,6 +114,8 @@ test('CSFolder activation is origin-pinned and CSBOARD status remains read-only'
       installed: true,
       extensionVersion: '1.1.2',
       capabilityVersion: 1,
+      // No reader wired: the one additive field says "never checked".
+      steamSession: 'unknown',
     },
   });
 
@@ -125,6 +127,72 @@ test('CSFolder activation is origin-pinned and CSBOARD status remains read-only'
   });
   assert.equal(csfolderStatus.ok, false);
   if (!csfolderStatus.ok) assert.equal(csfolderStatus.error.code, 'UNAUTHORIZED_ORIGIN');
+});
+
+/*
+  The status probe's one Steam word (1.1.26).
+
+  csboard can now tell "log into Steam in this browser" from "selling
+  unavailable" by asking. It gets the stored verdict and nothing else: a
+  reader that throws or answers off-vocabulary is `unknown`, and a probe that
+  will be refused never reaches the reader at all.
+*/
+test('status carries the stored Steam-login word and reads it only for a valid probe', async () => {
+  const neverCalled: ExternalPairAndEnableHandlers = {
+    async isPaired() { throw new Error('status must not reach pairing'); },
+    async pair() { throw new Error('status must not reach pairing'); },
+    async enablePortfolioSync() { throw new Error('status must not reach pairing'); },
+    async syncNow() { throw new Error('status must not reach pairing'); },
+    async disablePortfolioSync() { throw new Error('status must not reach pairing'); },
+  };
+  let reads = 0;
+  const probe = (
+    readSteamSession: () => Promise<'ok' | 'missing' | 'unknown'>,
+    payload: Record<string, unknown> = {},
+  ) => dispatchExternalMessage({
+    version: 1,
+    type: 'GET_EXTENSION_STATUS',
+    requestId: 'status_steam_01',
+    payload,
+  }, 'https://csboard.com', {
+    statusAllowedOrigins: STATUS_ORIGINS,
+    pairingAllowedOrigins: PAIRING_ORIGINS,
+    syncAllowedOrigins: SYNC_ORIGINS,
+    extensionVersion: '1.1.26',
+    readSteamSession: async () => { reads += 1; return readSteamSession(); },
+    handlers: neverCalled,
+    syncHandlers: forbiddenSyncHandlers,
+  });
+
+  const missing = await probe(async () => 'missing');
+  assert.deepEqual(missing, {
+    version: 1,
+    requestId: 'status_steam_01',
+    ok: true,
+    data: {
+      installed: true,
+      extensionVersion: '1.1.26',
+      capabilityVersion: 1,
+      steamSession: 'missing',
+    },
+  });
+
+  const ok = await probe(async () => 'ok');
+  assert.equal(ok.ok && 'steamSession' in ok.data ? ok.data.steamSession : null, 'ok');
+
+  const broken = await probe(async () => { throw new Error('storage detail'); });
+  assert.equal(broken.ok && 'steamSession' in broken.data ? broken.data.steamSession : null, 'unknown');
+
+  const offVocabulary = await probe(async () => 'steamid-76561198000000000' as 'ok');
+  assert.equal(
+    offVocabulary.ok && 'steamSession' in offVocabulary.data ? offVocabulary.data.steamSession : null,
+    'unknown',
+  );
+
+  const readsBeforeRefusal = reads;
+  const refused = await probe(async () => 'ok', { accessToken: 'requested' });
+  assert.equal(refused.ok, false);
+  assert.equal(reads, readsBeforeRefusal, 'a refused probe must not read the stored state');
 });
 
 test('activation rejects unknown fields, malformed codes and oversized requests before handlers', async () => {

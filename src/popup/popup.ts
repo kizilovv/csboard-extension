@@ -19,6 +19,13 @@ import {
   type LocalePreference,
 } from '../shared/i18n';
 import { sendTypedMessage } from '../shared/message-bus';
+import {
+  STEAM_SESSION_STATE_KEY,
+  UNKNOWN_STEAM_SESSION,
+  normalizeSteamSessionSnapshot,
+  readSteamSessionState,
+  type SteamSessionSnapshot,
+} from '../shared/steam-session-state';
 import { normalizeAvatarUrl, type UserProfile } from '../shared/types';
 import {
   DEFAULT_POPUP_SETTINGS,
@@ -86,6 +93,7 @@ let preferenceSync: PricePreferenceSyncStatus = {
   lastSyncedAt: null,
 };
 let portfolioStatus: PortfolioSyncStatus = DEFAULT_PORTFOLIO_STATUS;
+let steamSession: SteamSessionSnapshot = UNKNOWN_STEAM_SESSION;
 let settingsContractAvailable = false;
 let portfolioContractAvailable = false;
 let settingsBusy = false;
@@ -445,6 +453,39 @@ async function checkAuth(): Promise<void> {
 
   authState = { kind: 'signed-out' };
   renderAuth();
+}
+
+/*
+  The Steam-login warning. Shown only on a real "missing": `unknown` means no
+  check has run yet, and a warning on an install that has not looked is a
+  false alarm.
+*/
+function renderSteamSession(): void {
+  setHidden('#steam-session-alert', steamSession.state !== 'missing');
+}
+
+async function loadSteamSession(): Promise<void> {
+  steamSession = await readSteamSessionState();
+  renderSteamSession();
+  if (steamSession.state !== 'missing') return;
+
+  // The stored verdict can be an hour old and the seller may have just signed
+  // in, so a warning is re-checked before it is trusted. Shown meanwhile: the
+  // last thing we know is a better answer than a blank panel.
+  const result = await sendTypedMessage({ type: 'CHECK_STEAM_SESSION', version: 1 }, 15_000);
+  if (result.ok) {
+    steamSession = normalizeSteamSessionSnapshot(result.value);
+    renderSteamSession();
+  }
+}
+
+/** A pass or a Steam page load can settle the question while the popup is open. */
+function watchSteamSession(): void {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !(STEAM_SESSION_STATE_KEY in changes)) return;
+    steamSession = normalizeSteamSessionSnapshot(changes[STEAM_SESSION_STATE_KEY]?.newValue);
+    renderSteamSession();
+  });
 }
 
 function preferenceSyncDescription(): string {
@@ -936,6 +977,7 @@ function bindEvents(): void {
 
 /** Every panel that holds translated text, re-run when the locale changes. */
 function renderAll(): void {
+  renderSteamSession();
   renderAuth();
   renderSettings();
   renderPortfolio();
@@ -960,9 +1002,11 @@ async function init(): Promise<void> {
   applyTranslations();
 
   bindEvents();
+  watchSteamSession();
   renderAll();
 
   await Promise.allSettled([
+    loadSteamSession(),
     checkAuth(),
     loadSettings(),
     loadPortfolioStatus(),

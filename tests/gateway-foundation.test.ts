@@ -191,7 +191,7 @@ async function run(): Promise<void> {
     extensionVersion: '1.1.0',
   });
   assert(externalStatus.ok && Object.keys(externalStatus.data).sort().join(',') ===
-    'capabilityVersion,extensionVersion,installed', 'external response is status-only');
+    'capabilityVersion,extensionVersion,installed,steamSession', 'external response is status-only');
   const forbiddenExternal = dispatchExternalStatus({
     version: 1,
     type: 'GET_EXTENSION_STATUS',

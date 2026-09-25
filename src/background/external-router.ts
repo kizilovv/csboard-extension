@@ -7,6 +7,7 @@ import type {
   PortfolioCollectorWarningCode,
   SafePortfolioFailureCode,
 } from './portfolio-collector';
+import type { SteamSessionState } from '../shared/steam-session-state';
 
 export const EXTERNAL_STATUS_MESSAGE_TYPE = 'GET_EXTENSION_STATUS' as const;
 export const EXTERNAL_PAIR_AND_ENABLE_MESSAGE_TYPE =
@@ -124,6 +125,14 @@ export type ExternalStatusResponse =
         readonly installed: true;
         readonly extensionVersion: string;
         readonly capabilityVersion: 1;
+        /**
+         * Since 1.1.26. Whether the last check found a Steam login in this
+         * browser; `unknown` until one has run. One word and never an account
+         * id: it is the same fact STEAM_SESSION_REQUIRED already tells these
+         * origins, available before they ask for anything, so the site can say
+         * "log into Steam in this browser" instead of "selling unavailable".
+         */
+        readonly steamSession: SteamSessionState;
       };
     }
   /*
@@ -424,13 +433,17 @@ function externalError(
   return { version: 1, requestId, ok: false, error: { code } };
 }
 
-/** Pure external dispatcher. It has no provider, storage or internal-router dependency. */
+/**
+ * Pure external dispatcher. It has no provider, storage or internal-router
+ * dependency: the Steam-login word is read by the caller and handed in.
+ */
 export function dispatchExternalStatus(
   message: unknown,
   senderOrigin: string | null,
   options: {
     readonly allowedOrigins: ReadonlySet<string>;
     readonly extensionVersion: string;
+    readonly steamSession?: SteamSessionState;
   },
 ): ExternalStatusResponse {
   const requestId = safeExternalRequestId(message);
@@ -461,8 +474,22 @@ export function dispatchExternalStatus(
       installed: true,
       extensionVersion: options.extensionVersion,
       capabilityVersion: 1,
+      steamSession: options.steamSession ?? 'unknown',
     },
   };
+}
+
+/** A reader that throws or answers off-vocabulary says nothing: `unknown`. */
+async function readExternalSteamSession(
+  read: (() => Promise<SteamSessionState>) | undefined,
+): Promise<SteamSessionState> {
+  if (!read) return 'unknown';
+  try {
+    const state = await read();
+    return state === 'ok' || state === 'missing' ? state : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function externalMessageType(message: unknown): string | null {
@@ -566,6 +593,8 @@ export async function dispatchExternalMessage(
     readonly pairingAllowedOrigins: ReadonlySet<string>;
     readonly syncAllowedOrigins: ReadonlySet<string>;
     readonly extensionVersion: string;
+    /** The stored Steam-login verdict. Absent means every probe says `unknown`. */
+    readonly readSteamSession?: () => Promise<SteamSessionState>;
     readonly handlers: ExternalPairAndEnableHandlers;
     readonly syncHandlers: ExternalSyncHandlers;
   },
@@ -595,6 +624,11 @@ export async function dispatchExternalMessage(
     return dispatchExternalStatus(message, senderOrigin, {
       allowedOrigins: options.statusAllowedOrigins,
       extensionVersion: options.extensionVersion,
+      // Storage is touched only for a probe that will be answered: a malformed
+      // one is refused below without reading anything.
+      steamSession: isExactExternalStatusMessage(message)
+        ? await readExternalSteamSession(options.readSteamSession)
+        : 'unknown',
     });
   }
 
@@ -845,6 +879,7 @@ export function registerExternalStatusRouter(options: {
    *  installed must never, by itself, hand that site a Steam read. */
   readonly syncAllowedOrigins: readonly string[];
   readonly extensionVersion: string;
+  readonly readSteamSession?: () => Promise<SteamSessionState>;
   readonly handlers: ExternalPairAndEnableHandlers;
   readonly syncHandlers: ExternalSyncHandlers;
 }): () => void {
@@ -877,6 +912,7 @@ export function registerExternalStatusRouter(options: {
       pairingAllowedOrigins,
       syncAllowedOrigins,
       extensionVersion: options.extensionVersion,
+      ...(options.readSteamSession ? { readSteamSession: options.readSteamSession } : {}),
       handlers: options.handlers,
       syncHandlers: options.syncHandlers,
     });

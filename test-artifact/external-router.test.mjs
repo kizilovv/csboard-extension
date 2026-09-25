@@ -4,14 +4,30 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+/*
+  The one local key the status probe may read (1.1.26): the stored Steam-login
+  verdict, which it reports as a single word. Every other local read, and any
+  session read, is still a failure below.
+*/
+const STEAM_SESSION_KEY = 'csboard_steam_session';
+
 function createChromeMock(manifest) {
   const listeners = { external: null, internal: null };
-  const effects = { fetches: 0, localReads: 0, sessionReads: 0 };
+  const effects = { fetches: 0, localReads: 0, steamSessionReads: 0, sessionReads: 0 };
   const noopEvent = { addListener() {} };
+  const local = { [STEAM_SESSION_KEY]: { state: 'missing', checkedAt: 1_700_000_000_000 } };
   const storageArea = (kind) => ({
-    async get() {
-      if (kind === 'local') effects.localReads += 1;
-      else effects.sessionReads += 1;
+    async get(keys) {
+      if (kind !== 'local') {
+        effects.sessionReads += 1;
+        return {};
+      }
+      const list = Array.isArray(keys) ? keys : [keys];
+      if (list.length === 1 && list[0] === STEAM_SESSION_KEY) {
+        effects.steamSessionReads += 1;
+        return { [STEAM_SESSION_KEY]: local[STEAM_SESSION_KEY] };
+      }
+      effects.localReads += 1;
       return {};
     },
     async set() {},
@@ -85,8 +101,10 @@ test('real bundled service worker exposes only reviewed bounded external message
       installed: true,
       extensionVersion: manifest.version,
       capabilityVersion: 1,
+      steamSession: 'missing',
     },
   });
+  assert.equal(effects.steamSessionReads, 1, 'status read the Steam-login verdict once');
 
   const denied = [
     { type: 'GET_AUTH_STATUS' },
@@ -186,6 +204,8 @@ test('real bundled service worker exposes only reviewed bounded external message
   assert.deepEqual(internalNonPopup, { error: 'POPUP_ONLY_OPERATION' });
 
   assert.equal(effects.fetches, 0, 'external status router performed network I/O');
-  assert.equal(effects.localReads, 0, 'external status router read local storage');
+  assert.equal(effects.localReads, 0, 'external status router read local storage beyond the Steam-login verdict');
+  // Refused probes (the malformed statuses above) never reach storage at all.
+  assert.equal(effects.steamSessionReads, 1, 'a refused status probe read the Steam-login verdict');
   assert.equal(effects.sessionReads, 0, 'external status router read session/credential storage');
 });

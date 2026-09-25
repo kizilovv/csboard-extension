@@ -20,8 +20,15 @@ import { runP2PCancellations } from './p2p-trade-cancel';
 import {
   P2P_SALES_BADGE_ALARM,
   registerSalesBadgeAlarm,
+  repaintActionBadge,
   runSalesBadgePass,
 } from './p2p-sales-badge';
+import {
+  readSteamSessionState,
+  writeSteamSessionState,
+  type SteamSessionSnapshot,
+  type SteamSessionVerdict,
+} from '../shared/steam-session-state';
 import {
   priceEngine,
   type CompactPrice,
@@ -267,7 +274,7 @@ async function getSteamReadProvider(
     : await fetchSteamSession();
   if (!session.ok || !session.value.isLoggedIn || !session.value.steamId) {
     clearSteamReadProvider();
-    throw new Error('STEAM_SESSION_REQUIRED');
+    throw session.ok ? new SteamSignedOutError() : new Error('STEAM_SESSION_REQUIRED');
   }
   const actualSteamId = session.value.steamId;
   if (expectedSteamId && actualSteamId !== expectedSteamId) {
@@ -298,6 +305,82 @@ function clearSteamReadProvider(): void {
   steamReadProvider = null;
   steamReadProviderAccount = null;
 }
+
+/*
+  Steam answered, and nobody is signed in — as opposed to Steam not answering.
+
+  Both used to be one bare STEAM_SESSION_REQUIRED, and for every caller that
+  maps the error to a refusal code they still are: same message, same string.
+  The difference matters only to the Steam-login warning, which must not light
+  up because the laptop is offline or Steam is down for maintenance — telling
+  a seller to log in when he is logged in is how a warning stops being read.
+*/
+class SteamSignedOutError extends Error {
+  constructor() {
+    super('STEAM_SESSION_REQUIRED');
+  }
+}
+
+/*
+  Record what a check found and put it on the toolbar icon.
+
+  Repaints on every call, not only on a change: the stored state outlives a
+  browser restart and the badge does not, so "still missing" has to be painted
+  again. Returns what was stored before, or null when storage would not say.
+*/
+async function noteSteamSession(verdict: SteamSessionVerdict): Promise<SteamSessionSnapshot | null> {
+  try {
+    const previous = await writeSteamSessionState(verdict);
+    await repaintActionBadge();
+    return previous;
+  } catch (error) {
+    logger.warn('Could not record the Steam login state', { error: String(error) });
+    return null;
+  }
+}
+
+/*
+  A fresh look at the Steam login, outside the tracking pass.
+
+  The pass is what clears the warning, and it runs every three minutes at best
+  and hourly at worst. A seller who just followed the popup to Steam's login
+  page should not come back to the same warning for an hour, so two places ask
+  sooner: the popup when it opens, and a signed-in steamcommunity.com page when
+  it loads. Each only while the stored state says `missing` — a healthy install
+  never pays for this.
+
+  Same probe as the pass (the worker's own read of steamcommunity.com), so the
+  two cannot disagree and flap the badge. When the login is back it starts the
+  pass through the rate-limited catch-up, because that pass is what finally
+  gets the heartbeat to csboard and makes selling available again.
+*/
+let steamSessionRecheck: Promise<SteamSessionSnapshot> | null = null;
+
+function recheckSteamSession(): Promise<SteamSessionSnapshot> {
+  if (!steamSessionRecheck) {
+    steamSessionRecheck = performSteamSessionRecheck().finally(() => {
+      steamSessionRecheck = null;
+    });
+  }
+  return steamSessionRecheck;
+}
+
+async function performSteamSessionRecheck(): Promise<SteamSessionSnapshot> {
+  const session = await fetchSteamSession();
+  // Steam did not answer: no verdict, and the last one stands.
+  if (!session.ok) return readSteamSessionState();
+  const verdict: SteamSessionVerdict = session.value.isLoggedIn && session.value.steamId
+    ? 'ok'
+    : 'missing';
+  const previous = await noteSteamSession(verdict);
+  if (verdict === 'ok' && previous?.state === 'missing') {
+    void catchUpP2PTracking(runP2PTrackingPass);
+  }
+  return readSteamSessionState();
+}
+
+/** A Steam page load re-asks at most this often while the login is missing. */
+const STEAM_PAGE_RECHECK_MIN_INTERVAL_MS = 30_000;
 
 // --- Opt-in encrypted portfolio gateway ---
 const PORTFOLIO_UI_STATUS_KEY = 'csboard_portfolio_ui_status_v1';
@@ -1182,6 +1265,17 @@ router.on('GET_STEAM_READ_SESSION_STATUS', async () => {
   return { ready: steamReadProvider !== null };
 });
 
+// The popup's "is the Steam warning still true?" — see recheckSteamSession.
+router.on('CHECK_STEAM_SESSION', async (msg, sender) => {
+  requirePopupSender(sender);
+  if (msg.version !== 1) throw new Error('UNSUPPORTED_STEAM_SESSION_VERSION');
+  const current = await readSteamSessionState();
+  // Only a warning is worth a network round trip; `ok` and `unknown` are
+  // answered from storage and left to the pass.
+  if (current.state !== 'missing') return current;
+  return recheckSteamSession();
+});
+
 router.on('OFFER_STEAM_PAGE_CREDENTIAL', async (msg, sender) => {
   if (msg.version !== 1 ||
       !isTrustedSteamPageSender(sender, chrome.runtime.id)) {
@@ -1189,6 +1283,25 @@ router.on('OFFER_STEAM_PAGE_CREDENTIAL', async (msg, sender) => {
   }
   const credential = normalizeSteamPageCredential(msg.data);
   if (!credential) throw new Error('INVALID_STEAM_PAGE_CREDENTIAL');
+
+  /*
+    A signed-in Steam page just loaded — usually the one Steam lands on after
+    the login the popup sent the seller to. If the stored state still says the
+    login is missing, look again now instead of at the next pass. Before the
+    portfolio gate below on purpose: this is about selling, and most sellers
+    never pair a portfolio. Fire-and-forget, so the page's answer does not wait
+    on a Steam round trip.
+  */
+  void readSteamSessionState().then((current) => {
+    if (current.state === 'missing' &&
+        (current.checkedAt === null ||
+         Date.now() - current.checkedAt > STEAM_PAGE_RECHECK_MIN_INTERVAL_MS)) {
+      return recheckSteamSession();
+    }
+    return undefined;
+  }).catch((error) => {
+    logger.warn('Steam login recheck failed', { error: String(error) });
+  });
 
   const [registration, settings] = await Promise.all([
     getGatewayDeviceKeys().getRegistration().catch((): null => null),
@@ -1539,6 +1652,9 @@ registerExternalStatusRouter({
   // leave every RU seller unable to list.
   syncAllowedOrigins: ['https://csboard.com', 'https://csboard.trade'],
   extensionVersion: chrome.runtime.getManifest().version,
+  // One word about the Steam login, so the site can say "log into Steam in
+  // this browser" from the extension's own finding. See external-router.ts.
+  readSteamSession: async () => (await readSteamSessionState()).state,
   syncHandlers: {
     requestManualSync: requestExternalManualSync,
     readSyncStatus: readExternalSyncStatus,
@@ -1730,6 +1846,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   never reported and the sale hangs. Rate-limited inside `catchUpP2PTracking`,
   so a worker that wakes on every message does not turn this into a request per
   wake-up.
+
+  On a fresh install this is also the first Steam-login check: the pass records
+  what it found, so the toolbar badge and the popup are right from the first
+  minute instead of from the first alarm.
 */
 void catchUpP2PTracking(runP2PTrackingPass);
 // Paint the counter now rather than at the first alarm: a badge that appears
@@ -2170,11 +2290,20 @@ async function runP2PTrackingPass(): Promise<void> {
   try {
     provider = await getSteamReadProvider();
   } catch (error) {
-    // No usable Steam session: nothing below can read anything. Quiet, because
-    // this runs on a timer and being signed out is not a fault.
+    // No usable Steam session: nothing below can read anything. Quiet in the
+    // log, because this runs on a timer and being signed out is not a fault.
     logger.warn('P2P pass has no Steam session', { error: String(error) });
+    /*
+      But not silent to the seller any more. This return sends csboard nothing
+      — no heartbeat — so the site says selling is unavailable, and until
+      1.1.26 nothing on the seller's own screen said why (support, 2026-09-25).
+      The badge and the popup now do. Only for a real "signed out": a Steam
+      that did not answer leaves the last verdict standing.
+    */
+    if (error instanceof SteamSignedOutError) await noteSteamSession('missing');
     return;
   }
+  await noteSteamSession('ok');
 
   /*
     Three separate jobs, three separate failures.

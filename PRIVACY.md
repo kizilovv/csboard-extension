@@ -112,7 +112,7 @@ The popup lets the user disable CSBOARD-settings sync, disable the CSFloat compa
 - `https://csfloat.com`: overlays on the marketplace page, public metadata and user-opened search links.
 - `https://buff.163.com` and its HTTPS subdomains: opt-in, local-only marketplace display enhancements and user-opened links. No Buff response is sent to CSBOARD.
 
-No other origin may send messages to the extension. CSBOARD origins can request only extension version/capability status, an inventory sync run, and that run's state. The CSFolder origin can request only the single-use pairing + fixed-source activation described above. Neither surface exposes login state, inventory data, settings or any Steam write.
+No other origin may send messages to the extension. CSBOARD origins can request only extension version/capability status, an inventory sync run, and that run's state. Since version 1.1.26 the status answer also carries one word saying whether the extension's last check found a Steam login in this browser (`ok`, `missing` or `unknown`), so the site can tell the user to log into Steam; it never carries the Steam account, cookies or tokens. The CSFolder origin can request only the single-use pairing + fixed-source activation described above. Neither surface exposes Steam account identity or credentials, inventory data, settings or any Steam write.
 
 ## Permissions
 

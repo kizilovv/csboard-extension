@@ -28,6 +28,11 @@ export const ru: Record<MessageKey, string> = {
   'sites.buff': 'Buff163',
   'notifications.sales': 'Уведомлять о продажах',
 
+  // Вход в Steam в этом браузере (баннер в попапе + подсказка на иконке)
+  'steamSession.title': 'Войдите в Steam в этом браузере',
+  'steamSession.body': 'Расширение отправляет и проверяет обмены через вход в Steam в этом браузере.',
+  'steamSession.action': 'Войти в Steam',
+
   // Цены
   'prices.title': 'Цены',
   'prices.pull': 'Синхр.',

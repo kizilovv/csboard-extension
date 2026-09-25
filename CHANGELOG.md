@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.26
+
+- The extension now says when this browser has no Steam login. The tracking
+  pass used to return on it with a log line and nothing else: no heartbeat
+  reached csboard, the site said selling was unavailable, and the seller's own
+  screen showed an installed, enabled extension. That was the whole of a
+  support case on 2026-09-25. The pass now records `ok` / `missing`, and three
+  places read it: an amber "!" on the toolbar icon with "Log into Steam in this
+  browser" as its tooltip, a banner at the top of the popup with a button to
+  Steam's login page, and a `steamSession` word on the `GET_EXTENSION_STATUS`
+  answer so csboard can say the same thing from the extension's own finding.
+- A sale still wins the icon. The "!" shows only while there is no sale to
+  count; with both, the count stays on the badge and the tooltip carries the
+  login hint. When the login comes back the last count is put back without a
+  round trip to csboard.
+- Only a real sign-out is a warning. Steam not answering (offline, maintenance)
+  leaves the last verdict standing, and `unknown` (never checked) shows
+  nothing, so a fresh install is not greeted with an alarm before it has
+  looked. It looks right away: the install-time catch-up pass is the first check.
+- The warning clears itself. While it stands, the popup re-checks on open and a
+  signed-in steamcommunity.com page re-checks when it loads; finding the login
+  back starts the tracking pass, which is what gets the heartbeat to csboard.
+
 ## 1.1.25
 
 - Trade tracking now tells csboard WHEN, not only what. Status reports of an

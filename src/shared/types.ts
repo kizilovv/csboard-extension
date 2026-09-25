@@ -17,6 +17,7 @@ import type {
   PricePreferenceSyncStatus,
   PortfolioSyncStatus as PopupPortfolioSyncStatus,
 } from '../popup/contracts';
+import type { SteamSessionSnapshot } from './steam-session-state';
 
 export type SteamId64 = Brand<string, 'SteamId64'>;
 export type TradeOfferId = Brand<string, 'TradeOfferId'>;
@@ -301,6 +302,9 @@ export type ExtensionMessage =
   // exact-origin internal content-script boundary and is never stored, logged,
   // returned, or exposed through onMessageExternal.
   | { type: 'GET_STEAM_READ_SESSION_STATUS' }
+  // Popup only: re-check a stored "no Steam login" verdict. Answers ok/missing,
+  // never an account id.
+  | { type: 'CHECK_STEAM_SESSION'; version: 1 }
   | { type: 'GET_TRADE_HOLD_ITEMS'; data: { steamId: SteamId64 } }
   | { type: 'CLEAR_STEAM_READ_SESSION' }
   | {
@@ -350,6 +354,7 @@ export type MessageResponseMap = {
     sync?: PricePreferenceSyncStatus;
   };
   GET_STEAM_READ_SESSION_STATUS: { ready: boolean };
+  CHECK_STEAM_SESSION: SteamSessionSnapshot;
   GET_TRADE_HOLD_ITEMS: TradeHoldStatus;
   CLEAR_STEAM_READ_SESSION: { success: true };
   OFFER_STEAM_PAGE_CREDENTIAL: { accepted: true; syncTriggered: boolean };

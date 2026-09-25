@@ -31,6 +31,17 @@
     </header>
 
     <main>
+      <!--
+        First, and only while it is true: without a Steam login in this browser
+        the extension can neither send an item nor tell csboard it is alive, so
+        selling on the site stops and nothing else here would say why.
+      -->
+      <section id="steam-session-alert" class="card steam-alert hidden" role="alert" aria-labelledby="steam-session-title">
+        <h2 id="steam-session-title" class="card-title" data-i18n="steamSession.title">Log into Steam in this browser</h2>
+        <p class="supporting-text" data-i18n="steamSession.body">The extension sends and checks trades through this browser's Steam login.</p>
+        <a id="steam-login-btn" class="btn btn-primary btn-compact" href="https://steamcommunity.com/login/home/" target="_blank" rel="noopener noreferrer" data-i18n="steamSession.action">Log into Steam</a>
+      </section>
+
       <section class="card account-card" aria-label="csboard account">
         <span id="user-avatar-fallback" class="avatar avatar-fallback" aria-hidden="true">?</span>
         <img id="user-avatar" class="avatar avatar-image hidden" alt="" referrerpolicy="no-referrer">
