@@ -165,7 +165,17 @@ test('the tracking pass records the Steam login, and only a real sign-out warns'
   const { readFileSync } = await import('node:fs');
   const worker = readFileSync(new URL('../src/background/service-worker.ts', import.meta.url), 'utf8');
   assert.match(worker, /throw session\.ok \? new SteamSignedOutError\(\) : new Error\('STEAM_SESSION_REQUIRED'\);/);
-  assert.match(worker, /if \(error instanceof SteamSignedOutError\) await noteSteamSession\('missing'\);\n    return;\n  \}\n  await noteSteamSession\('ok'\);/);
+  // `missing` comes only from a real sign-out (steam-pass-access.ts maps it).
+  assert.match(worker, /isSignedOut: \(error\) => error instanceof SteamSignedOutError,/);
+  const pass = worker.slice(worker.indexOf('async function runP2PTrackingPass('));
+  const unreachable = pass.slice(
+    pass.indexOf("if (access.state === 'unreachable')"),
+    pass.indexOf("if (access.state === 'missing')"),
+  );
+  assert.match(unreachable, /return;/);
+  assert.doesNotMatch(unreachable, /noteSteamSession/);
+  assert.match(pass, /if \(access\.state === 'missing'\) \{[\s\S]*?await noteSteamSession\('missing'\);/);
+  assert.match(pass, /const provider = access\.provider;\n  await noteSteamSession\('ok'\);/);
   // Same message either way, so every refusal-code mapping keeps working.
   assert.match(worker, /super\('STEAM_SESSION_REQUIRED'\);/);
   // The popup's recheck is popup-only.

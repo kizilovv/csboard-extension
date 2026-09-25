@@ -2,15 +2,16 @@
   Whether this browser has a Steam login the extension can use.
 
   Everything a seller does through csboard rides on the Steam login in THIS
-  browser: sending the item, watching the offer, and the heartbeat that tells
-  the site the extension is alive. Without one, the tracking pass returns
-  before it reports anything, and until 1.1.26 that return was a log line in a
+  browser: sending the item and watching the offer. Before 1.1.26 the tracking
+  pass returned without one before it reported anything — no heartbeat, so
+  csboard never saw the extension — and that return was a log line in a
   service worker nobody opens. The support case that prompted this
   (2026-09-25): the extension was installed and enabled, selling on the site
   stayed unavailable, and nothing on the seller's screen said why.
 
-  So the pass writes down what it found, and three readers show it: the
-  toolbar badge, the popup, and csboard's status probe.
+  So the pass writes down what it found, and four readers show it: the
+  toolbar badge, the popup, csboard's status probe, and the heartbeat, which
+  now goes out either way and carries this verdict to the backend.
 
   `unknown` is "never checked", not a third state of the login: a fresh install
   before its first pass, or storage written by a build older than this key.

@@ -542,6 +542,13 @@ export async function trackP2PTrades(
  * same reason — `extensionLastSeenAt` says a client called, not whether the
  * call could see Steam. A seller whose token has died shows up here as
  * `tokenOk: false` with the read error, hours before a sale goes silent.
+ *
+ * `steamSession` because this is now sent from a pass that found no Steam
+ * login as well. It used to be sent only after a pass that had one, so a
+ * seller without a Steam login in this browser never reached csboard at all:
+ * no device, and the site told him he had no client while the extension sat
+ * installed and enabled (support, 2026-09-25). The call is what pairs the
+ * device; `missing` is what keeps csboard from counting it as able to send.
  */
 export async function reportExtensionStatus(report: {
   version: string;
@@ -551,6 +558,7 @@ export async function reportExtensionStatus(report: {
   outcome: TrackOutcome | null;
   lastPassAt: number | null;
   nextPassAt: number | null;
+  steamSession: 'ok' | 'missing';
 }): Promise<void> {
   const base = await getApiBase();
   try {
@@ -570,6 +578,7 @@ export async function reportExtensionStatus(report: {
         watched: report.outcome?.watched ?? { sales: 0, purchases: 0, unsent: 0 },
         lastPassAt: report.lastPassAt ? new Date(report.lastPassAt).toISOString() : null,
         nextPassAt: report.nextPassAt ? new Date(report.nextPassAt).toISOString() : null,
+        steamSession: report.steamSession,
       }),
     });
   } catch (error) {

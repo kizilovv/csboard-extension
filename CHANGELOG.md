@@ -21,7 +21,21 @@
   looked. It looks right away: the install-time catch-up pass is the first check.
 - The warning clears itself. While it stands, the popup re-checks on open and a
   signed-in steamcommunity.com page re-checks when it loads; finding the login
-  back starts the tracking pass, which is what gets the heartbeat to csboard.
+  back runs the tracking pass at once, which is what tells csboard.
+- A pass without a Steam login still reports to csboard. The heartbeat
+  (`POST /p2p/ext/status`) goes out either way and now carries
+  `steamSession: 'ok' | 'missing'`; everything that reads Steam is skipped when
+  it is missing. The call is what pairs the device, so a seller who installs
+  the extension is paired before he logs into Steam, and the site can say
+  "log into Steam in this browser" instead of "no client". Needs the backend
+  that reads the field: an older one would count such a device as able to
+  send. Not sent when csboard says nobody is signed in to it here.
+- The pass looks for the login through an open steamcommunity.com tab first.
+  It names the csboard account (`/auth/me`) so the page-credential bridge can
+  lend a signed-in tab's token; with third-party cookies blocked the worker's
+  own read of Steam sees a signed-out page, and the pass used to stop there.
+  A Steam login for another account falls back to the unnamed read, as before.
+  No new permissions.
 
 ## 1.1.25
 

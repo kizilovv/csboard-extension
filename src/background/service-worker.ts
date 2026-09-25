@@ -45,6 +45,7 @@ import {
 } from './csboard-direct-sync';
 import { getTradeHoldItems } from '../shared/steam-api';
 import { fetchSteamSession } from './steam-session';
+import { resolvePassSteamAccess, type PassSteamAccess } from './steam-pass-access';
 import { createMessageRouter } from '../shared/message-bus';
 import { createRetryingLazyPromise } from '../shared/retrying-lazy-promise';
 import {
@@ -321,6 +322,15 @@ class SteamSignedOutError extends Error {
   }
 }
 
+/** The pass's way to Steam — see steam-pass-access.ts for why it names the account. */
+function openSteamForPass(): Promise<PassSteamAccess<SteamReadSessionProvider>> {
+  return resolvePassSteamAccess({
+    readCsboardAccount: readAccountForSync,
+    openReader: (expectedSteamId) => getSteamReadProvider(expectedSteamId),
+    isSignedOut: (error) => error instanceof SteamSignedOutError,
+  });
+}
+
 /*
   Record what a check found and put it on the toolbar icon.
 
@@ -349,10 +359,13 @@ async function noteSteamSession(verdict: SteamSessionVerdict): Promise<SteamSess
   it loads. Each only while the stored state says `missing` — a healthy install
   never pays for this.
 
-  Same probe as the pass (the worker's own read of steamcommunity.com), so the
-  two cannot disagree and flap the badge. When the login is back it starts the
-  pass through the rate-limited catch-up, because that pass is what finally
-  gets the heartbeat to csboard and makes selling available again.
+  Same way to Steam as the pass (openSteamForPass: the page bridge for the
+  csboard account, then the worker's own read), so the two cannot disagree
+  and flap the badge. When the login is back it runs the pass straight away,
+  not through the rate-limited catch-up: the pass that just reported `missing`
+  is usually minutes old, the catch-up would skip, and csboard would keep
+  saying "log into Steam" for up to an hour to a seller who just did. Once
+  per missing-to-ok transition, so it cannot turn into a loop.
 */
 let steamSessionRecheck: Promise<SteamSessionSnapshot> | null = null;
 
@@ -366,15 +379,15 @@ function recheckSteamSession(): Promise<SteamSessionSnapshot> {
 }
 
 async function performSteamSessionRecheck(): Promise<SteamSessionSnapshot> {
-  const session = await fetchSteamSession();
+  const access = await openSteamForPass();
   // Steam did not answer: no verdict, and the last one stands.
-  if (!session.ok) return readSteamSessionState();
-  const verdict: SteamSessionVerdict = session.value.isLoggedIn && session.value.steamId
-    ? 'ok'
-    : 'missing';
+  if (access.state === 'unreachable') return readSteamSessionState();
+  const verdict: SteamSessionVerdict = access.state;
   const previous = await noteSteamSession(verdict);
   if (verdict === 'ok' && previous?.state === 'missing') {
-    void catchUpP2PTracking(runP2PTrackingPass);
+    void runP2PTrackingPass().catch((error) => {
+      logger.warn('P2P pass after Steam login failed', { error: String(error) });
+    });
   }
   return readSteamSessionState();
 }
@@ -2286,23 +2299,38 @@ async function performAutomaticPortfolioSync(epoch: number): Promise<void> {
   extension carries the same catch-up.
 */
 async function runP2PTrackingPass(): Promise<void> {
-  let provider: Awaited<ReturnType<typeof getSteamReadProvider>>;
-  try {
-    provider = await getSteamReadProvider();
-  } catch (error) {
-    // No usable Steam session: nothing below can read anything. Quiet in the
-    // log, because this runs on a timer and being signed out is not a fault.
-    logger.warn('P2P pass has no Steam session', { error: String(error) });
-    /*
-      But not silent to the seller any more. This return sends csboard nothing
-      — no heartbeat — so the site says selling is unavailable, and until
-      1.1.26 nothing on the seller's own screen said why (support, 2026-09-25).
-      The badge and the popup now do. Only for a real "signed out": a Steam
-      that did not answer leaves the last verdict standing.
-    */
-    if (error instanceof SteamSignedOutError) await noteSteamSession('missing');
+  const access = await openSteamForPass();
+  if (access.state === 'unreachable') {
+    // Steam did not answer: no verdict about the login, and nothing new to
+    // tell csboard. The last report and the last verdict both stand.
+    logger.warn('P2P pass could not reach Steam', { error: String(access.error) });
     return;
   }
+  if (access.state === 'missing') {
+    // Quiet in the log, because this runs on a timer and being signed out is
+    // not a fault.
+    logger.warn('P2P pass has no Steam session');
+    await noteSteamSession('missing');
+    /*
+      Still call csboard, and skip everything that needs Steam.
+
+      This used to be a bare return, and the return was the whole failure:
+      no request reached csboard, so no device was paired, and the site told a
+      seller with the extension installed and enabled that he had no client
+      (Gemalert, support 2026-09-25 — paired within minutes of logging into
+      Steam). The heartbeat is what pairs the device; `steamSession: missing`
+      is what keeps csboard from counting it as able to send and lets the site
+      say what is actually missing.
+
+      Not when csboard itself says nobody is signed in here: that request
+      would only be a 401.
+    */
+    if (access.csboard !== 'signed-out') {
+      await reportPassStatus({ steamSession: 'missing', tokenOk: null, outcome: null });
+    }
+    return;
+  }
+  const provider = access.provider;
   await noteSteamSession('ok');
 
   /*
@@ -2472,25 +2500,12 @@ async function runP2PTrackingPass(): Promise<void> {
     logger.warn('P2P trade reporting failed', { error: String(error) });
   }
 
-  try {
-    // The heartbeat rides on the same pass, after it, with what the pass saw.
-    const [community, steamApi, alarm] = await Promise.all([
-      chrome.permissions.contains({ origins: ['*://steamcommunity.com/*'] }).catch(() => false),
-      chrome.permissions.contains({ origins: ['*://api.steampowered.com/*'] }).catch(() => false),
-      chrome.alarms.get(P2P_TRACK_ALARM).catch(() => undefined),
-    ]);
-    await reportExtensionStatus({
-      version: chrome.runtime.getManifest().version,
-      steamId: steamReadProviderAccount ?? null,
-      tokenOk: provider.hasUsableAccessToken?.() ?? null,
-      permissions: { steamCommunity: community, steamApi },
-      outcome: trackOutcome,
-      lastPassAt: Date.now(),
-      nextPassAt: alarm?.scheduledTime ?? null,
-    });
-  } catch (error) {
-    logger.warn('Extension status report failed', { error: String(error) });
-  }
+  // The heartbeat rides on the same pass, after it, with what the pass saw.
+  await reportPassStatus({
+    steamSession: 'ok',
+    tokenOk: provider.hasUsableAccessToken?.() ?? null,
+    outcome: trackOutcome,
+  });
 
   try {
     await runP2PCancellations(async () => {
@@ -2512,6 +2527,34 @@ async function runP2PTrackingPass(): Promise<void> {
     await runSalesBadgePass();
   } catch (error) {
     logger.warn('Sales badge refresh failed', { error: String(error) });
+  }
+}
+
+/** The pass's heartbeat to csboard. Best-effort: a failure is logged, never thrown. */
+async function reportPassStatus(pass: {
+  readonly steamSession: 'ok' | 'missing';
+  readonly tokenOk: boolean | null;
+  readonly outcome: TrackOutcome | null;
+}): Promise<void> {
+  try {
+    const [community, steamApi, alarm] = await Promise.all([
+      chrome.permissions.contains({ origins: ['*://steamcommunity.com/*'] }).catch(() => false),
+      chrome.permissions.contains({ origins: ['*://api.steampowered.com/*'] }).catch(() => false),
+      chrome.alarms.get(P2P_TRACK_ALARM).catch(() => undefined),
+    ]);
+    await reportExtensionStatus({
+      version: chrome.runtime.getManifest().version,
+      // Without a login the provider was cleared, so there is no account to name.
+      steamId: pass.steamSession === 'ok' ? steamReadProviderAccount ?? null : null,
+      tokenOk: pass.tokenOk,
+      permissions: { steamCommunity: community, steamApi },
+      outcome: pass.outcome,
+      lastPassAt: Date.now(),
+      nextPassAt: alarm?.scheduledTime ?? null,
+      steamSession: pass.steamSession,
+    });
+  } catch (error) {
+    logger.warn('Extension status report failed', { error: String(error) });
   }
 }
 
