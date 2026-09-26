@@ -152,6 +152,14 @@ export interface SteamOffersDisplayReadOptions {
   readonly activeOnly?: boolean;
   readonly sent?: boolean;
   readonly received?: boolean;
+  /**
+   * `false` for a reader that only needs ids, states and asset ids (the P2P
+   * tracker and its cancellation pass). The description table is most of the
+   * response, and the tracker asked for it twice per pass for nothing; CSFloat's
+   * tracker reads GetTradeOffers without it. Items still come back, just with
+   * no names or icons. Default true: the page overlays need them.
+   */
+  readonly descriptions?: boolean;
 }
 
 export interface SteamOffersDisplayReadResult {
@@ -975,8 +983,9 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       ...(options.activeOnly
         ? {}
         : { time_historical_cutoff: String(historicalCutoff) }),
-      get_descriptions: '1',
-      language: 'english',
+      ...(options.descriptions === false
+        ? {}
+        : { get_descriptions: '1', language: 'english' }),
     });
     const descriptions = buildDescriptionMap(asArray(response['descriptions']));
 

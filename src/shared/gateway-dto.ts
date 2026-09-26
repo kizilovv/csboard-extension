@@ -279,6 +279,22 @@ export class GatewayPayloadError extends Error {
   }
 }
 
+/**
+ * `String(error)` for a report that leaves the browser, with the safe context
+ * kept. `String()` of this class is only "GatewayPayloadError: INVALID_PAYLOAD",
+ * which is every Steam read failure alike: a 429, a 502 and a lost session all
+ * read the same in the P2P heartbeat, and nobody could tell which one a seller
+ * had (2026-09-24, 2026-09-26). `safeContext` is paths, counts, reason words
+ * and HTTP statuses by construction, so it may travel.
+ */
+export function describeError(error: unknown): string {
+  if (!(error instanceof GatewayPayloadError)) return String(error);
+  const context = Object.entries(error.safeContext)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
+  return context ? `${String(error)} (${context})` : String(error);
+}
+
 const FORBIDDEN_KEY_NAMES = new Set([
   'authorization',
   'proxyauthorization',

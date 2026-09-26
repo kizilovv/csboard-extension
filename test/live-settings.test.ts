@@ -273,9 +273,10 @@ test('the P2P pass uses the unfiltered offer reader and a legal history size', (
   );
 
   assert.doesNotMatch(pass, /provider\.readTradeOffers\(\)/);
-  // Both the tracker and the cancellation pass read it.
+  // Both the tracker and the cancellation pass read it, without descriptions:
+  // neither reads a name, and the table is most of the response (2026-09-26).
   assert.equal(
-    (pass.match(/readTradeOffersForDisplay\(\{ received: false \}\)/g) ?? []).length,
+    (pass.match(/readTradeOffersForDisplay\(\{ received: false, descriptions: false \}\)/g) ?? []).length,
     2,
   );
   /*

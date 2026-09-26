@@ -31,6 +31,7 @@
 */
 
 import { getApiBase } from '../shared/config';
+import { describeError } from '../shared/gateway-dto';
 import { createLogger } from '../shared/logger';
 
 const logger = createLogger('p2p-tracker');
@@ -432,8 +433,8 @@ export async function trackP2PTrades(
   try {
     offers = await readOffers();
   } catch (error) {
-    logger.warn('Could not read Steam offers', { error: String(error) });
-    outcome.errors.offers = String(error).slice(0, 300);
+    logger.warn('Could not read Steam offers', { error: describeError(error) });
+    outcome.errors.offers = describeError(error).slice(0, 300);
     return outcome;
   }
 
@@ -493,8 +494,8 @@ export async function trackP2PTrades(
   try {
     history = await readHistory({ assetIds: wantedAssets, notBefore });
   } catch (error) {
-    logger.warn('Could not read Steam trade history', { error: String(error) });
-    outcome.errors.history = String(error).slice(0, 300);
+    logger.warn('Could not read Steam trade history', { error: describeError(error) });
+    outcome.errors.history = describeError(error).slice(0, 300);
     return outcome;
   }
   if (history.length === 0) return outcome;

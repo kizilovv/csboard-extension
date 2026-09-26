@@ -36,6 +36,16 @@
   own read of Steam sees a signed-out page, and the pass used to stop there.
   A Steam login for another account falls back to the unnamed read, as before.
   No new permissions.
+- The tracking pass reads Steam offers without the description table. It read
+  GetTradeOffers twice per pass (tracking, then cancellations), both times
+  with every item's names, icons and tags, and used none of them; CSFloat's
+  tracker does not ask for them either. Less to download, less for Steam to
+  refuse. The trade-offers page overlays still get them.
+- A failed Steam read says why. The heartbeat's `errors.offers` /
+  `errors.history` used to be "GatewayPayloadError: INVALID_PAYLOAD" for
+  every failure alike; they now carry the reason and HTTP status, e.g.
+  `(reason=steam-read-failed, status=429)`. csboard only calls the extension
+  blind when that keeps happening, not on one such pass.
 
 ## 1.1.25
 

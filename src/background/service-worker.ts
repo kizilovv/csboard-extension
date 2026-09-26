@@ -2362,7 +2362,8 @@ async function runP2PTrackingPass(): Promise<void> {
         offers are excluded: a seller's delivery is always an offer he sent.
       */
       async () => {
-        const result = await provider.readTradeOffersForDisplay({ received: false });
+        // No descriptions: the tracker reads ids, states and asset ids only.
+        const result = await provider.readTradeOffersForDisplay({ received: false, descriptions: false });
         return result.offers.map((offer) => ({
           offerId: offer.tradeofferid,
           state: offer.trade_offer_state,
@@ -2511,7 +2512,7 @@ async function runP2PTrackingPass(): Promise<void> {
     await runP2PCancellations(async () => {
       // Same reader, same reason: a cancelled offer is state 6, and the
       // portfolio reader would have thrown it away before we could see it die.
-      const result = await provider.readTradeOffersForDisplay({ received: false });
+      const result = await provider.readTradeOffersForDisplay({ received: false, descriptions: false });
       return result.offers.map((offer) => ({
         offerId: offer.tradeofferid,
         state: offer.trade_offer_state,
