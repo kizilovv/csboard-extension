@@ -41,6 +41,11 @@ export const en = {
   'p2pScam.label': 'Not your CSBoard buyer',
   'p2pScam.confirmAgain': 'Click again if you are sure',
 
+  // Incoming offer asking for skins in a live buyout, not from its vendor (Steam pages)
+  'buyoutScam.title': 'Careful: this is not the CSBoard buyout bot',
+  'buyoutScam.body': 'This trade asks for items from your CSBoard sale, but it was sent by the wrong bot. This is what the stolen Steam API key scam looks like: decline the trade and revoke your key at steamcommunity.com/dev/apikey.',
+  'buyoutScam.label': 'Not the CSBoard buyout bot',
+
   // Prices
   'prices.title': 'Prices',
   'prices.pull': 'Sync',

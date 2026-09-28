@@ -41,13 +41,14 @@
   alarm on a genuine sale teaches the seller to ignore the next one.
 
   Pure on purpose: no chrome, no fetch. The background feeds it and stores the
-  result; the page scripts only read what was stored.
+  result; the page scripts read what was stored, and only drop a flag for a
+  trade the user provably does not lose on (`scamWarningStands`, below).
 */
+
+import type { OfferValue } from './offer-valuation';
 
 /** chrome.storage.local key holding the flags the page scripts render. */
 export const P2P_SCAM_OFFERS_KEY = 'p2p.scamOffers';
-
-/** Offer ids already announced by a notification, so each is announced once. */
 
 /*
   Sales that are still "sold" from the seller's point of view: from the buyer
@@ -104,7 +105,7 @@ export function accountIdFromSteamId64(steamId: string): string | null {
 }
 
 /** `accountid_other` as a canonical decimal string, or null if it is not one. */
-function canonicalAccountId(value: string): string | null {
+export function canonicalAccountId(value: string): string | null {
   if (!/^[0-9]{1,10}$/.test(value)) return null;
   const accountId = BigInt(value);
   if (accountId <= 0n || accountId > 0xffffffffn) return null;
@@ -175,9 +176,13 @@ export function mergeScamFlags(
   previous: readonly ScamOfferFlag[],
   fresh: readonly ScamOfferFlag[],
   activeOfferIds: ReadonlySet<string>,
+  /** A guard that can later learn an offer is legitimate says so here. */
+  cleared: (flag: ScamOfferFlag) => boolean = () => false,
 ): ScamOfferFlag[] {
   const merged = new Map<string, ScamOfferFlag>();
-  for (const flag of previous) if (activeOfferIds.has(flag.offerId)) merged.set(flag.offerId, flag);
+  for (const flag of previous) {
+    if (activeOfferIds.has(flag.offerId) && !cleared(flag)) merged.set(flag.offerId, flag);
+  }
   for (const flag of fresh) merged.set(flag.offerId, flag);
   return [...merged.values()];
 }
@@ -202,4 +207,26 @@ export function readStoredScamFlags(value: unknown): ScamOfferFlag[] {
     });
   }
   return flags;
+}
+
+/*
+  Whether a flagged offer is still worth the red block and the second click,
+  given what it is worth to each side (owner, 2026-09-28).
+
+  A seller who comes out ahead, or even, is not being robbed: warning him
+  there is the noise that teaches him to click through the one that counts.
+  So the warning goes only on a loss — or when the value cannot be told
+  (an item on either side with no price, or no valuation at all), because
+  "cannot prove it is fair" is not "fair".
+
+  The value is the offers list's own P/L (`shared/offer-valuation.ts`), so the
+  warning and the badge next to it never disagree. Exact comparison, not the
+  badge's half-a-unit neutral band: the owner's line is received ≥ given.
+
+  Used by both page warnings, the P2P one and the buyout one.
+*/
+export function scamWarningStands(value: OfferValue | null): boolean {
+  if (!value) return true;
+  if (value.give.unpriced || value.receive.unpriced) return true;
+  return value.receive.total < value.give.total;
 }

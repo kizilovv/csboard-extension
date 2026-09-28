@@ -1,12 +1,22 @@
 /*
-  The page half of the incoming-offer scam warning.
+  The page half of the scam warnings: the P2P "not your buyer" one and the
+  buyout "not the buyout bot" one.
 
-  The background decides which offers are the scam (see
-  `shared/p2p-scam-offers.ts` for the rule and the 2026-09 incident) and stores
-  them under `p2p.scamOffers`. This module only reads that list and marks what
-  it names: a red block and a two-click Accept on the offer's own page, a red
-  label on the offers list. It never reads the network, never judges an offer
-  itself, and never touches an offer that is not in the list.
+  The background decides which offers match (the rules and incidents are in
+  `shared/p2p-scam-offers.ts` and `shared/buyout-scam-offers.ts`) and stores
+  them under `p2p.scamOffers` and `buyout.scamOffers`. This module reads those
+  lists and marks what they name: a red block and a two-click Accept on the
+  offer's own page, a red frame and label on the offers list. It never judges
+  an offer by the rule itself, and never touches one that is not listed.
+
+  ── ONLY ON A LOSS ────────────────────────────────────────────────────────
+
+  A listed offer is still left alone when the user provably comes out ahead or
+  even (owner, 2026-09-28). That is decided here, where the prices are, with
+  the offers list's own P/L maths (`shared/offer-valuation.ts`) and the same
+  offer data the list prices from (the background's FETCH_STEAM_TRADE_OFFERS).
+  No price, no offer data, no answer: the warning stays, because "cannot prove
+  it is fair" is not "fair". See `scamWarningStands`.
 
   ── NOT BEHIND THE SITE SWITCH ────────────────────────────────────────────
 
@@ -21,13 +31,17 @@
   `p2p-send.ts` shares the `/tradeoffer/*` pages: it sends from
   `/tradeoffer/new/` and cancels on `/tradeoffer/<id>/`. Neither can meet this:
   `new` has no offer id, and the offers it cancels are ones the seller SENT,
-  which the rule never flags.
+  which neither rule flags.
 */
 
-import { loadLocalePreference, resolveLocale, tFor, type Locale } from '../../shared/i18n';
-import { P2P_SCAM_OFFERS_KEY, readStoredScamFlags } from '../../shared/p2p-scam-offers';
+import { loadLocalePreference, resolveLocale, tFor, type Locale, type MessageKey } from '../../shared/i18n';
+import { BUYOUT_SCAM_OFFERS_KEY } from '../../shared/buyout-scam-offers';
+import { offerItemPrice, valueOffer, type OfferValue } from '../../shared/offer-valuation';
+import { P2P_SCAM_OFFERS_KEY, readStoredScamFlags, scamWarningStands } from '../../shared/p2p-scam-offers';
+import { priceEngine } from '../../shared/price-engine';
+import { readSteamPageCredential } from '../../shared/steam-page-credential';
 
-const WARNING_ID = 'csboard-scam-warning';
+const WARNING_CLASS = 'csboard-scam-warning';
 const CONFIRM_HINT_CLASS = 'csboard-scam-confirm-hint';
 const LIST_OFFER_CLASS = 'csboard-scam-offer';
 const LIST_LABEL_CLASS = 'csboard-scam-offer-label';
@@ -42,6 +56,23 @@ const ACCEPT_BUTTON_SELECTOR = '#trade_confirmbtn';
 */
 const SAME_GESTURE_MS = 700;
 
+type ScamKind = 'p2p' | 'buyout';
+
+/** Storage key and texts per kind. Buyout first: a stolen API key is the worse news. */
+const KINDS: ReadonlyArray<{
+  readonly kind: ScamKind;
+  readonly key: string;
+  readonly title: MessageKey;
+  readonly body: MessageKey;
+  readonly label: MessageKey;
+}> = [
+  { kind: 'buyout', key: BUYOUT_SCAM_OFFERS_KEY, title: 'buyoutScam.title', body: 'buyoutScam.body', label: 'buyoutScam.label' },
+  { kind: 'p2p', key: P2P_SCAM_OFFERS_KEY, title: 'p2pScam.title', body: 'p2pScam.body', label: 'p2pScam.label' },
+];
+
+/** offerId → the kinds of warning it carries. */
+type FlaggedOffers = Map<string, ScamKind[]>;
+
 async function pageLocale(): Promise<Locale> {
   try {
     return resolveLocale(await loadLocalePreference());
@@ -50,70 +81,159 @@ async function pageLocale(): Promise<Locale> {
   }
 }
 
-async function readFlaggedOfferIds(): Promise<Set<string>> {
+function collectFlags(values: Readonly<Record<string, unknown>>): FlaggedOffers {
+  const flagged: FlaggedOffers = new Map();
+  for (const { kind, key } of KINDS) {
+    for (const flag of readStoredScamFlags(values[key])) {
+      flagged.set(flag.offerId, [...(flagged.get(flag.offerId) ?? []), kind]);
+    }
+  }
+  return flagged;
+}
+
+async function readFlaggedOffers(): Promise<FlaggedOffers> {
   try {
-    const stored = await chrome.storage.local.get(P2P_SCAM_OFFERS_KEY);
-    return new Set(readStoredScamFlags(stored?.[P2P_SCAM_OFFERS_KEY]).map((flag) => flag.offerId));
+    return collectFlags(await chrome.storage.local.get(KINDS.map(({ key }) => key)));
   } catch {
-    // No list, no marks. The notification is the other channel.
-    return new Set();
+    // No list, no marks.
+    return new Map();
   }
 }
 
-/** The background refreshes the list each pass; a page left open follows it. */
-function onFlaggedOfferIdsChanged(apply: (ids: Set<string>) => void): void {
+/** The background refreshes both lists each pass; a page left open follows them. */
+function onFlaggedOffersChanged(apply: (flagged: FlaggedOffers) => void): void {
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
-      const change = changes[P2P_SCAM_OFFERS_KEY];
-      if (!change) return;
-      apply(new Set(readStoredScamFlags(change.newValue).map((flag) => flag.offerId)));
+      if (!KINDS.some(({ key }) => changes[key])) return;
+      void readFlaggedOffers().then(apply);
     });
   } catch {
     // Extension context gone (reloaded under an open tab): the page keeps what it drew.
   }
 }
 
+interface OffersResponse {
+  readonly offers?: { readonly trade_offers_received?: ReadonlyArray<Record<string, unknown>> };
+  readonly items?: ReadonlyArray<{ classid: string; instanceid: string; market_hash_name?: string; icon_url?: unknown }>;
+}
+
+/*
+  What each listed offer is worth to each side, or nothing for an offer that
+  could not be valued. The same read and the same maths as the list's P/L
+  badge; asked for only when there is a listed offer on the page.
+*/
+async function valueReceivedOffers(offerIds: ReadonlySet<string>): Promise<Map<string, OfferValue>> {
+  const values = new Map<string, OfferValue>();
+  if (offerIds.size === 0) return values;
+  let response: OffersResponse | null;
+  try {
+    await priceEngine.init();
+    response = await new Promise<OffersResponse | null>((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'FETCH_STEAM_TRADE_OFFERS',
+          data: { sent: 0, received: 1, ...(readSteamPageCredential() ?? {}) },
+        },
+        (reply) => {
+          if (chrome.runtime.lastError || !reply || reply.error) resolve(null);
+          else resolve(reply as OffersResponse);
+        },
+      );
+    });
+  } catch {
+    response = null;
+  }
+  const items = response?.items ?? [];
+  for (const offer of response?.offers?.trade_offers_received ?? []) {
+    const offerId = offer['tradeofferid'];
+    if (typeof offerId !== 'string' || !offerIds.has(offerId)) continue;
+    values.set(offerId, valueOffer(
+      offer as { items_to_give?: Array<{ classid: string; instanceid: string }>; items_to_receive?: Array<{ classid: string; instanceid: string }> },
+      (item) => offerItemPrice(item, items, (name, phase) => priceEngine.getPrice(name, phase)),
+    ));
+  }
+  return values;
+}
+
+/*
+  Values are asked for once per offer per page: an offer's items do not change,
+  and the list refreshes every pass. An offer the read did not value is asked
+  about again on the next change — maybe the credential is there by then.
+*/
+function createValuer(): (offerIds: Iterable<string>) => Promise<Map<string, OfferValue>> {
+  const known = new Map<string, OfferValue>();
+  return async (offerIds) => {
+    const missing = new Set([...offerIds].filter((id) => !known.has(id)));
+    for (const [id, value] of await valueReceivedOffers(missing)) known.set(id, value);
+    return known;
+  };
+}
+
 /**
  * The offer's own page: `/tradeoffer/<id>/`.
  *
- * A flagged offer gets the warning above the trade area, and its Accept button
- * a second click: the first one is swallowed and says so. No `alert` or
- * `confirm`: a native dialog is exactly what a seller clicks through without
- * reading, and Steam's own confirmations have trained him to.
+ * A listed offer that is a loss (or cannot be valued) gets the warning above
+ * the trade area, and its Accept button a second click: the first one is
+ * swallowed and says so. No `alert` or `confirm`: a native dialog is exactly
+ * what a user clicks through without reading, and Steam's own confirmations
+ * have trained him to.
  */
 export function guardScamOfferPage(): void {
   const offerId = /^\/tradeoffer\/([0-9]+)/.exec(window.location.pathname)?.[1];
   if (!offerId) return;
 
-  let flagged = false;
+  let kinds: ScamKind[] = [];
+  /*
+    `undefined` while the valuation is still coming. The Accept gate holds in
+    that window (a listed offer is guilty until priced); the red block waits,
+    so a profitable offer does not flash a warning and take it back.
+  */
+  let stands: boolean | undefined;
   let locale: Locale = 'en';
   let armedAt: number | null = null;
+  const valueOf = createValuer();
+
+  const guarded = (): boolean => kinds.length > 0 && stands !== false;
 
   const render = (): void => {
-    const existing = document.getElementById(WARNING_ID);
-    if (!flagged) {
-      existing?.remove();
+    document.querySelectorAll(`.${WARNING_CLASS}`).forEach((block) => block.remove());
+    if (!guarded()) {
       document.querySelectorAll(`.${CONFIRM_HINT_CLASS}`).forEach((hint) => hint.remove());
       armedAt = null;
       return;
     }
-    if (existing) return;
-    const block = document.createElement('div');
-    block.id = WARNING_ID;
-    block.className = 'csboard-scam-warning';
-    block.setAttribute('role', 'alert');
-    const title = document.createElement('strong');
-    title.textContent = tFor(locale, 'p2pScam.title');
-    const body = document.createElement('p');
-    body.textContent = tFor(locale, 'p2pScam.body');
-    block.append(title, body);
+    if (stands !== true) return;
     const tradeArea = document.getElementById('trade_area');
-    if (tradeArea?.parentElement) {
-      tradeArea.insertAdjacentElement('beforebegin', block);
-    } else {
-      (document.getElementById('mainContent') ?? document.body).prepend(block);
+    for (const kind of kinds) {
+      const texts = KINDS.find((entry) => entry.kind === kind);
+      if (!texts) continue;
+      const block = document.createElement('div');
+      block.className = WARNING_CLASS;
+      block.setAttribute('role', 'alert');
+      const title = document.createElement('strong');
+      title.textContent = tFor(locale, texts.title);
+      const body = document.createElement('p');
+      body.textContent = tFor(locale, texts.body);
+      block.append(title, body);
+      if (tradeArea?.parentElement) {
+        tradeArea.insertAdjacentElement('beforebegin', block);
+      } else {
+        (document.getElementById('mainContent') ?? document.body).prepend(block);
+      }
     }
+  };
+
+  const apply = async (flagged: FlaggedOffers): Promise<void> => {
+    kinds = flagged.get(offerId) ?? [];
+    if (kinds.length === 0) {
+      render();
+      return;
+    }
+    render();
+    const values = await valueOf([offerId]);
+    stands = scamWarningStands(values.get(offerId) ?? null);
+    render();
   };
 
   const showConfirmHint = (button: Element): void => {
@@ -128,11 +248,11 @@ export function guardScamOfferPage(): void {
   /*
     Capture phase on the window, so this runs before any handler Steam put on
     the button or its ancestors, and before an inline `onclick` or a
-    `javascript:` href. Only while the offer is flagged, only on the Accept
+    `javascript:` href. Only while the offer is guarded, only on the Accept
     button; every other click on the page is untouched.
   */
   window.addEventListener('click', (event) => {
-    if (!flagged) return;
+    if (!guarded()) return;
     const target = event.target;
     if (!(target instanceof Element)) return;
     const button = target.closest(ACCEPT_BUTTON_SELECTOR);
@@ -151,44 +271,47 @@ export function guardScamOfferPage(): void {
     showConfirmHint(button);
   }, true);
 
-  onFlaggedOfferIdsChanged((ids) => {
-    flagged = ids.has(offerId);
-    render();
-  });
+  onFlaggedOffersChanged((flagged) => { void apply(flagged); });
   void (async () => {
     locale = await pageLocale();
-    flagged = (await readFlaggedOfferIds()).has(offerId);
-    render();
+    await apply(await readFlaggedOffers());
   })();
 }
 
 /**
- * The offers list: a red frame and a label on each flagged offer. Accepting
- * from the list goes through the offer's own page, where the gate is.
+ * The offers list: a red frame and a label on each listed offer that is a
+ * loss or cannot be valued. Accepting from the list goes through the offer's
+ * own page, where the gate is.
  */
 export function markScamOffersOnList(): void {
   let locale: Locale = 'en';
+  const valueOf = createValuer();
 
-  const apply = (ids: Set<string>): void => {
-    for (const offerEl of document.querySelectorAll<HTMLElement>('[id^="tradeofferid_"]')) {
-      const flagged = ids.has(offerEl.id.slice('tradeofferid_'.length));
-      offerEl.classList.toggle(LIST_OFFER_CLASS, flagged);
-      const label = offerEl.querySelector(`:scope > .${LIST_LABEL_CLASS}`);
-      if (flagged && !label) {
-        const tag = document.createElement('div');
-        tag.className = LIST_LABEL_CLASS;
-        tag.textContent = tFor(locale, 'p2pScam.label');
-        tag.title = tFor(locale, 'p2pScam.body');
-        offerEl.insertAdjacentElement('afterbegin', tag);
-      } else if (!flagged && label) {
-        label.remove();
-      }
+  const apply = async (flagged: FlaggedOffers): Promise<void> => {
+    const offerEls = [...document.querySelectorAll<HTMLElement>('[id^="tradeofferid_"]')];
+    const idOf = (el: HTMLElement): string => el.id.slice('tradeofferid_'.length);
+    const listedHere = offerEls.map(idOf).filter((id) => flagged.has(id));
+    const values = listedHere.length > 0 ? await valueOf(listedHere) : new Map<string, OfferValue>();
+
+    for (const offerEl of offerEls) {
+      const offerId = idOf(offerEl);
+      const kinds = flagged.get(offerId) ?? [];
+      const marked = kinds.length > 0 && scamWarningStands(values.get(offerId) ?? null);
+      offerEl.classList.toggle(LIST_OFFER_CLASS, marked);
+      offerEl.querySelector(`:scope > .${LIST_LABEL_CLASS}`)?.remove();
+      const texts = KINDS.find((entry) => entry.kind === kinds[0]);
+      if (!marked || !texts) continue;
+      const tag = document.createElement('div');
+      tag.className = LIST_LABEL_CLASS;
+      tag.textContent = tFor(locale, texts.label);
+      tag.title = tFor(locale, texts.body);
+      offerEl.insertAdjacentElement('afterbegin', tag);
     }
   };
 
-  onFlaggedOfferIdsChanged(apply);
+  onFlaggedOffersChanged((flagged) => { void apply(flagged); });
   void (async () => {
     locale = await pageLocale();
-    apply(await readFlaggedOfferIds());
+    await apply(await readFlaggedOffers());
   })();
 }

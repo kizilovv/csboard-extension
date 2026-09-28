@@ -39,6 +39,11 @@ export const ru: Record<MessageKey, string> = {
   'p2pScam.label': 'Не покупатель CSBoard',
   'p2pScam.confirmAgain': 'Нажмите ещё раз, если уверены',
 
+  // Входящий трейд с предметами из живой скупки, не от её бота (страницы Steam)
+  'buyoutScam.title': 'Осторожно: это не бот скупки CSBoard',
+  'buyoutScam.body': 'Этот обмен просит предметы из вашей продажи на CSBoard, но прислан не тем ботом. Так выглядит скам с украденным API-ключом Steam: отклоните обмен и отзовите ключ на steamcommunity.com/dev/apikey.',
+  'buyoutScam.label': 'Не бот скупки CSBoard',
+
   // Цены
   'prices.title': 'Цены',
   'prices.pull': 'Синхр.',

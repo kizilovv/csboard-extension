@@ -29,6 +29,7 @@ import {
 } from '../../shared/steam-inventory-properties';
 import type { ParsedSteamAssetProperties } from '../../shared/steam-asset-properties';
 import { markScamOffersOnList } from './p2p-scam-warning';
+import { offerItemPrice, valueOffer } from '../../shared/offer-valuation';
 
 const logger = createLogger('trade-offers-list');
 
@@ -478,43 +479,16 @@ class TradeOffersListScript {
 
       activeOfferCount++;
 
-      // Calculate totals
-      let yourTotal = 0;
-      let theirTotal = 0;
-      let yourNoPrice = false;
-      let theirNoPrice = false;
-
-      if (offer.items_to_give) {
-        for (const item of offer.items_to_give) {
-          const desc = items.find(
-            (i) => i.classid === item.classid && i.instanceid === item.instanceid
-          );
-          if (desc?.market_hash_name) {
-            const dp = desc.icon_url ? getDopplerInfo(desc.icon_url as string)?.name : undefined;
-            const price = priceEngine.getPrice(desc.market_hash_name, dp);
-            if (price) yourTotal += price.raw;
-            else yourNoPrice = true;
-          } else {
-            yourNoPrice = true;
-          }
-        }
-      }
-
-      if (offer.items_to_receive) {
-        for (const item of offer.items_to_receive) {
-          const desc = items.find(
-            (i) => i.classid === item.classid && i.instanceid === item.instanceid
-          );
-          if (desc?.market_hash_name) {
-            const dp = desc.icon_url ? getDopplerInfo(desc.icon_url as string)?.name : undefined;
-            const price = priceEngine.getPrice(desc.market_hash_name, dp);
-            if (price) theirTotal += price.raw;
-            else theirNoPrice = true;
-          } else {
-            theirNoPrice = true;
-          }
-        }
-      }
+      // Calculate totals. Shared with the scam warnings, which must call a
+      // trade a loss exactly when this badge does: see shared/offer-valuation.
+      const value = valueOffer(
+        offer as { items_to_give?: SteamItem[]; items_to_receive?: SteamItem[] },
+        (item) => offerItemPrice(item, items, (name, phase) => priceEngine.getPrice(name, phase)),
+      );
+      const yourTotal = value.give.total;
+      const theirTotal = value.receive.total;
+      const yourNoPrice = value.give.unpriced;
+      const theirNoPrice = value.receive.unpriced;
 
       const profitLoss = theirTotal - yourTotal;
       const plBase = yourTotal > 0 ? yourTotal : theirTotal;

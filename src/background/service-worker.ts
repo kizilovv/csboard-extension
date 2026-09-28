@@ -18,6 +18,7 @@ import {
 } from './p2p-trade-tracker';
 import { runP2PCancellations } from './p2p-trade-cancel';
 import { runP2PScamGuard } from './p2p-scam-guard';
+import { runBuyoutScamGuard } from './buyout-scam-guard';
 import {
   P2P_SALES_BADGE_ALARM,
   registerSalesBadgeAlarm,
@@ -2518,26 +2519,47 @@ async function runP2PTrackingPass(): Promise<void> {
     Received and active only, and no descriptions: the rule reads ids, states,
     the partner and asset ids, and an inbox of bot-site withdrawals with their
     description tables is a lot of bytes to answer that.
+
+    One inbox read serves both scam checks (P2P, then buyout), made only if
+    one of them has something to look for, and made once: the second caller
+    gets the first caller's answer, or its failure.
   */
-  try {
-    await runP2PScamGuard(async () => {
-      const result = await provider.readTradeOffersForDisplay({
-        sent: false,
-        activeOnly: true,
-        descriptions: false,
-      });
-      return result.offers.map((offer) => ({
-        offerId: offer.tradeofferid,
-        direction: offer.direction,
-        state: offer.trade_offer_state,
-        partnerAccountId: offer.accountid_other,
-        // Steam's `items_to_give` is relative to the account that reads it:
-        // on a RECEIVED offer these are the seller's own items.
-        givenAssetIds: offer.items_to_give.map((item) => item.assetid),
-      }));
+  let receivedOffers: ReturnType<typeof readReceivedOffers> | null = null;
+  const readReceivedOffers = async () => {
+    const result = await provider.readTradeOffersForDisplay({
+      sent: false,
+      activeOnly: true,
+      descriptions: false,
     });
+    return result.offers.map((offer) => ({
+      offerId: offer.tradeofferid,
+      direction: offer.direction,
+      state: offer.trade_offer_state,
+      partnerAccountId: offer.accountid_other,
+      // Steam's `items_to_give` is relative to the account that reads it:
+      // on a RECEIVED offer these are the seller's own items.
+      givenAssetIds: offer.items_to_give.map((item) => item.assetid),
+    }));
+  };
+  const receivedOffersOnce = () => {
+    if (!receivedOffers) receivedOffers = readReceivedOffers();
+    return receivedOffers;
+  };
+
+  try {
+    await runP2PScamGuard(receivedOffersOnce);
   } catch (error) {
     logger.warn('P2P scam check failed', { error: String(error) });
+  }
+
+  /*
+    The buyout's version of the same danger: a stolen Steam API key used to
+    swap the vendor's offer for a lookalike. See shared/buyout-scam-offers.ts.
+  */
+  try {
+    await runBuyoutScamGuard(receivedOffersOnce);
+  } catch (error) {
+    logger.warn('Buyout scam check failed', { error: String(error) });
   }
 
   try {

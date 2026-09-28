@@ -13,7 +13,9 @@
 
   Stores the flagged offers in chrome.storage.local, where the Steam page
   scripts read them to put a red warning on the offer and a second click on
-  its Accept button. No system notification (owner, 2026-09-28).
+  its Accept button, unless the trade provably does not lose him value (that
+  filter is the page's: it has the prices). No system notification (owner,
+  2026-09-28).
 
   ── WHAT IT NEVER DOES ────────────────────────────────────────────────────
 
