@@ -2509,15 +2509,20 @@ async function runP2PTrackingPass(): Promise<void> {
   });
 
   try {
-    await runP2PCancellations(async () => {
-      // Same reader, same reason: a cancelled offer is state 6, and the
-      // portfolio reader would have thrown it away before we could see it die.
-      const result = await provider.readTradeOffersForDisplay({ received: false, descriptions: false });
-      return result.offers.map((offer) => ({
-        offerId: offer.tradeofferid,
-        state: offer.trade_offer_state,
-      }));
-    });
+    await runP2PCancellations(
+      async () => {
+        // Same reader, same reason: a cancelled offer is state 6, and the
+        // portfolio reader would have thrown it away before we could see it die.
+        const result = await provider.readTradeOffersForDisplay({ received: false, descriptions: false });
+        return result.offers.map((offer) => ({
+          offerId: offer.tradeofferid,
+          state: offer.trade_offer_state,
+        }));
+      },
+      // An offer the list does not contain is read on its own before anything
+      // is said about it: missing from a list is not the same as dead.
+      (offerId) => provider.readTradeOfferState(offerId),
+    );
   } catch (error) {
     logger.warn('P2P cancellation pass failed', { error: String(error) });
   }

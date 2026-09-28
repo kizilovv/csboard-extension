@@ -310,14 +310,18 @@ test('the P2P pass uses the unfiltered offer reader and a legal history size', (
   assert.match(providerSource, /if \(state !== 3\) return \[\];/);
 
   /*
-    An offer missing from a successful sent-offer read counts as settled. That
-    is the judgement that lets a cancellation ever be confirmed, and reverting
-    it to "unknown" silently strands orders, so it is asserted rather than left
-    to a comment.
+    An offer missing from the sent-offer read is NOT settled (2026-09-28): the
+    list stops at the historical cutoff and an accepted offer can be missing
+    from it too, so "absent → dead" confirmed cancellations nobody had seen.
+    What keeps a missing offer from stranding its order instead is the
+    one-offer read the pass makes for it — so both halves are asserted: the
+    classification, and that the worker hands the pass that read.
   */
   const cancelSource = readFileSync(
     new URL('../src/background/p2p-trade-cancel.ts', import.meta.url),
     'utf8',
   );
-  assert.match(cancelSource, /return state === undefined \|\| OFFER_DEAD_STATES\.has\(state\);/);
+  assert.match(cancelSource, /if \(state === undefined \|\| state === null\) return 'missing';/);
+  assert.doesNotMatch(cancelSource, /state === undefined \|\| OFFER_DEAD_STATES/);
+  assert.match(pass, /\(offerId\) => provider\.readTradeOfferState\(offerId\)/);
 });

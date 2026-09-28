@@ -181,6 +181,17 @@ export interface SteamReadSessionProvider {
     options?: SteamOffersDisplayReadOptions,
   ): Promise<SteamOffersDisplayReadResult>;
   /**
+   * One offer's `trade_offer_state`, read by id with `GetTradeOffer`.
+   *
+   * For the cancellation pass, which has to know what became of an offer that
+   * is simply ABSENT from the list read — a partial answer, or one older than
+   * the historical cutoff. Absent is not dead: an accepted offer can be absent
+   * too. `null` means Steam answered without that offer (or without a usable
+   * state), which the caller treats as "not read"; a transport failure throws,
+   * as every other read here does.
+   */
+  readTradeOfferState(offerId: string): Promise<number | null>;
+  /**
    * Hands the provider a webapi token that a content script already had in the
    * page DOM (`#application_config[data-loyalty_webapi_token]`).
    *
@@ -631,7 +642,7 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
   }
 
   private async fetchSteamApi(
-    method: 'GetInventoryItemsWithDescriptions' | 'GetTradeHistory' | 'GetTradeOffers',
+    method: 'GetInventoryItemsWithDescriptions' | 'GetTradeHistory' | 'GetTradeOffers' | 'GetTradeOffer',
     params: Readonly<Record<string, string>>,
   ): Promise<Record<string, unknown>> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1036,6 +1047,23 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         ...readOffers(response['trade_offers_sent'], 'sent'),
       ],
     };
+  }
+
+  async readTradeOfferState(offerId: string): Promise<number | null> {
+    if (!/^[0-9]{1,32}$/.test(offerId)) {
+      throw new GatewayPayloadError('INVALID_PAYLOAD', { path: '$.tradeofferid' });
+    }
+    // No descriptions: the only field wanted is the state. Steam answers an
+    // offer this account is not a party to (or one it has forgotten) with an
+    // empty `response`, which is "no answer", not "dead".
+    const response = await this.fetchSteamApi('GetTradeOffer', { tradeofferid: offerId });
+    const offer = response['offer'];
+    if (typeof offer !== 'object' || offer === null || Array.isArray(offer)) return null;
+    const record = offer as Record<string, unknown>;
+    // The id is checked too: a state is only worth anything for the offer that was asked about.
+    if (optionalString(record['tradeofferid'], 32) !== offerId) return null;
+    const state = optionalInteger(record['trade_offer_state']);
+    return state !== undefined && state > 0 && state <= 32 ? state : null;
   }
 }
 

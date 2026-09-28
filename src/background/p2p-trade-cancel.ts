@@ -24,6 +24,10 @@
   so. An offer that still reads Active is left in the queue and retried, and one
   that reads Accepted is reported as the state it is — the backend decides what
   that means, and it means something very different.
+
+  An offer that is simply not IN the list is not an answer either way. It is
+  read on its own (`GetTradeOffer`) and judged by the state that comes back;
+  see `classifyQueuedOffer`.
 */
 
 import { getApiBase } from '../shared/config';
@@ -46,6 +50,13 @@ const TAB_POLL_MS = 400;
  * several passes rather than having twenty Steam tabs opened at him at once.
  */
 const MAX_CANCELS_PER_PASS = 5;
+
+/**
+ * And on the single-offer reads that settle an offer missing from the list:
+ * each is one more Steam request, and a backlog of them clears over several
+ * passes the same way the cancels do.
+ */
+const MAX_SINGLE_READS_PER_PASS = 5;
 
 /*
   A cancel that cannot succeed must not be retried forever.
@@ -104,22 +115,43 @@ function backoffMs(attempt: number): number {
 */
 const OFFER_DEAD_STATES = new Set([1, 4, 5, 6, 7, 8, 10]);
 
+/** Steam's ETradeOfferState `Accepted`: the skin went to the buyer. */
+const OFFER_ACCEPTED_STATE = 3;
+
 /*
-  Is this offer past the point where the buyer could still take the item?
+  What Steam's answer about one queued offer tells this pass to do.
 
-  Absent from a successful read counts as YES, and that is the deliberate part.
-  Steam's sent-offer list is the seller's own complete list; an offer we just
-  cancelled and can no longer find in it has not become invisible while staying
-  live. csfloat's extension makes the same judgement in the same direction —
-  `state === Active` blocks their cancel ping, and anything else, including not
-  found, lets it through.
+    dead      the buyer can no longer take the item: confirm it to the backend.
+    accepted  the buyer already has it. Never confirmed as cancelled and never
+              "cancelled" again; the tracker reports state 3 through its own
+              endpoint, where the backend knows what that means.
+    live      anything else Steam reports (Active, needs-confirmation, in
+              escrow, a state this file has never heard of): the cancel path.
+    missing   not in the list read at all: read that one offer before deciding.
 
-  Treating absence as "unknown" instead was what left two live orders with a
-  dead offer in Steam and an open queue entry on the server: they were cancelled
-  correctly, and then nothing would ever say so.
+  ── WHY MISSING IS NOT DEAD ───────────────────────────────────────────────
+
+  This used to be one boolean, and absent counted as dead: the sent-offer list
+  was taken to be the seller's complete list, so an offer gone from it had to
+  be gone from Steam. It is not complete. It stops at the historical cutoff, a
+  read can come back partial, and an ACCEPTED offer can be missing from it as
+  easily as a cancelled one. Absent → dead told the backend "cancelled, verified"
+  about offers nobody had looked at, and `confirm-cancel` finalises money.
+
+  The case that rule was written for still resolves: two orders sat with a dead
+  offer in Steam and an open queue entry because absence was treated as
+  "unknown" and nothing ever asked again. Now something does ask —
+  `GetTradeOffer` for that one id — and the state it returns goes back through
+  this same function. A read that fails decides nothing and is retried next
+  pass.
 */
-function offerIsSettled(state: number | undefined): boolean {
-  return state === undefined || OFFER_DEAD_STATES.has(state);
+export type QueuedOfferVerdict = 'dead' | 'accepted' | 'live' | 'missing';
+
+export function classifyQueuedOffer(state: number | null | undefined): QueuedOfferVerdict {
+  if (state === undefined || state === null) return 'missing';
+  if (OFFER_DEAD_STATES.has(state)) return 'dead';
+  if (state === OFFER_ACCEPTED_STATE) return 'accepted';
+  return 'live';
 }
 
 interface PendingCancellation {
@@ -254,9 +286,14 @@ async function confirmCancelled(item: PendingCancellation): Promise<void> {
  * file does not decide how a Steam session is obtained. It is used TWICE and
  * for two different questions — before, to skip offers Steam already considers
  * finished, and after, to prove the ones we just cancelled actually died.
+ *
+ * `readOfferState` is the one-offer read (`GetTradeOffer`), asked only about an
+ * offer the list did not contain. It may throw or answer null; either way that
+ * item decides nothing this pass and is asked about again on the next.
  */
 export async function runP2PCancellations(
   readOffers: () => Promise<ReadonlyArray<{ offerId: string; state: number }>>,
+  readOfferState: (offerId: string) => Promise<number | null>,
 ): Promise<void> {
   const queue = await readPendingCancellations();
   if (queue.length === 0) return;
@@ -272,7 +309,17 @@ export async function runP2PCancellations(
     had nothing to say about either. Silence is not evidence of nothing
     happening.
   */
-  const tally = { queued: queue.length, alreadyDead: 0, cancelled: 0, refused: 0, confirmed: 0, stillLive: 0 };
+  const tally = {
+    queued: queue.length,
+    alreadyDead: 0,
+    cancelled: 0,
+    refused: 0,
+    confirmed: 0,
+    stillLive: 0,
+    accepted: 0,
+    singleReads: 0,
+    unread: 0,
+  };
 
   /*
     A queued cancellation overrides the slow pace.
@@ -294,16 +341,80 @@ export async function runP2PCancellations(
   }
 
   /*
+    Steam's verdict on one queued offer: the list's state when the list has it,
+    otherwise the offer read on its own. `unread` is the honest answer when
+    neither is available — the single read failed, came back empty, or this
+    pass has spent its budget of them — and it decides nothing.
+
+    Only the look BEFORE cancelling is budgeted. The re-read after the batch is
+    at most one read per cancel just made, and the batch is capped already;
+    lookups on the rest of the queue must not starve the proof for those.
+  */
+  let budgetedReads = 0;
+  const verdictFor = async (
+    item: PendingCancellation,
+    listState: number | undefined,
+    budgeted: boolean,
+  ): Promise<QueuedOfferVerdict | 'unread'> => {
+    const fromList = classifyQueuedOffer(listState);
+    if (fromList !== 'missing') return fromList;
+    if (budgeted) {
+      if (budgetedReads >= MAX_SINGLE_READS_PER_PASS) return 'unread';
+      budgetedReads += 1;
+    }
+    tally.singleReads += 1;
+    let state: number | null;
+    try {
+      state = await readOfferState(item.steamTradeOfferId);
+    } catch (error) {
+      logger.warn('Could not read a queued offer on its own; skipping it this pass', {
+        orderId: item.orderId,
+        steamTradeOfferId: item.steamTradeOfferId,
+        error: String(error),
+      });
+      return 'unread';
+    }
+    const single = classifyQueuedOffer(state);
+    if (single === 'missing') {
+      logger.warn('Steam gave no state for a queued offer; skipping it this pass', {
+        orderId: item.orderId,
+        steamTradeOfferId: item.steamTradeOfferId,
+      });
+      return 'unread';
+    }
+    logger.info('Queued offer was not in the list; read it on its own', {
+      orderId: item.orderId,
+      steamTradeOfferId: item.steamTradeOfferId,
+      state,
+      verdict: single,
+    });
+    return single;
+  };
+
+  /*
     Anything Steam already calls dead needs no cancel call at all — just the
     confirmation the backend has been waiting for. This is the ordinary case
     for a seller who cancelled the offer himself in Steam.
+
+    An accepted offer is neither confirmed nor cancelled: the buyer has the
+    skin, and a cancel tab for it could only fail. It stays in the queue until
+    the backend hears state 3.
   */
   const alreadyDead: PendingCancellation[] = [];
   const work: PendingCancellation[] = [];
   for (const item of queue) {
-    const state = before.get(item.steamTradeOfferId);
-    if (offerIsSettled(state)) {
+    const verdict = await verdictFor(item, before.get(item.steamTradeOfferId), true);
+    if (verdict === 'unread') {
+      tally.unread += 1;
+      continue;
+    }
+    if (verdict === 'dead') {
       alreadyDead.push(item);
+      continue;
+    }
+    if (verdict === 'accepted') {
+      tally.accepted += 1;
+      delete attempts[item.orderId];
       continue;
     }
     // Given up on, or not due for another try yet.
@@ -370,6 +481,9 @@ export async function runP2PCancellations(
     offer, and saying it was would bury the single worst outcome this whole path
     exists to catch. The tracker reports that state through its own endpoint,
     where the backend knows what to do with it.
+
+    An offer the re-read does not contain gets the same one-offer read as
+    before the batch. Not finding it is not proof it died.
   */
   let after: Map<string, number>;
   try {
@@ -383,15 +497,33 @@ export async function runP2PCancellations(
 
   for (const item of batch) {
     const state = after.get(item.steamTradeOfferId);
-    if (offerIsSettled(state)) {
+    const verdict = await verdictFor(item, state, false);
+    if (verdict === 'dead') {
       await confirmCancelled(item);
       delete attempts[item.orderId];
       tally.confirmed += 1;
       logger.info('Offer cancelled and verified', {
         orderId: item.orderId,
         steamTradeOfferId: item.steamTradeOfferId,
-        state,
+        state: state ?? 'read-on-its-own',
       });
+      continue;
+    }
+    if (verdict === 'accepted') {
+      // The buyer took it before the cancel landed. Not ours to report as
+      // anything but what it is; see above.
+      tally.accepted += 1;
+      delete attempts[item.orderId];
+      logger.warn('Offer was accepted, not cancelled', {
+        orderId: item.orderId,
+        steamTradeOfferId: item.steamTradeOfferId,
+      });
+      continue;
+    }
+    if (verdict === 'unread') {
+      // No state to judge by. Not counted against the cancel budget: the
+      // cancel may well have worked, and the next pass reads it again.
+      tally.unread += 1;
       continue;
     }
     /*
@@ -404,7 +536,7 @@ export async function runP2PCancellations(
     logger.warn('Cancelled but not yet confirmed dead by Steam', {
       orderId: item.orderId,
       steamTradeOfferId: item.steamTradeOfferId,
-      steamState: state ?? 'not-in-offer-list',
+      steamState: state ?? 'read-on-its-own',
     });
     if (!attempts[item.orderId]) {
       /*
