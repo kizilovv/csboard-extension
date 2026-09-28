@@ -17,6 +17,7 @@ import {
   type TrackOutcome,
 } from './p2p-trade-tracker';
 import { runP2PCancellations } from './p2p-trade-cancel';
+import { runP2PScamGuard } from './p2p-scam-guard';
 import {
   P2P_SALES_BADGE_ALARM,
   registerSalesBadgeAlarm,
@@ -2334,7 +2335,7 @@ async function runP2PTrackingPass(): Promise<void> {
   await noteSteamSession('ok');
 
   /*
-    Three separate jobs, three separate failures.
+    Separate jobs, separate failures.
 
     They used to share one try block with the cancellations last, so ANY fault
     in the reporting half — a Steam history read timing out, say — skipped the
@@ -2507,6 +2508,37 @@ async function runP2PTrackingPass(): Promise<void> {
     tokenOk: provider.hasUsableAccessToken?.() ?? null,
     outcome: trackOutcome,
   });
+
+  /*
+    Then the incoming offers: is anyone asking this seller for a skin he sold
+    on csboard, while not being its buyer? See shared/p2p-scam-offers.ts for
+    the incident. Its own try, like the others: a failed check must not cost
+    the cancellations, and the reverse.
+
+    Received and active only, and no descriptions: the rule reads ids, states,
+    the partner and asset ids, and an inbox of bot-site withdrawals with their
+    description tables is a lot of bytes to answer that.
+  */
+  try {
+    await runP2PScamGuard(async () => {
+      const result = await provider.readTradeOffersForDisplay({
+        sent: false,
+        activeOnly: true,
+        descriptions: false,
+      });
+      return result.offers.map((offer) => ({
+        offerId: offer.tradeofferid,
+        direction: offer.direction,
+        state: offer.trade_offer_state,
+        partnerAccountId: offer.accountid_other,
+        // Steam's `items_to_give` is relative to the account that reads it:
+        // on a RECEIVED offer these are the seller's own items.
+        givenAssetIds: offer.items_to_give.map((item) => item.assetid),
+      }));
+    });
+  } catch (error) {
+    logger.warn('P2P scam check failed', { error: String(error) });
+  }
 
   try {
     await runP2PCancellations(

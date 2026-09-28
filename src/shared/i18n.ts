@@ -123,7 +123,21 @@ export function t(
   key: MessageKey,
   vars?: Readonly<Record<string, string | number>>,
 ): string {
-  const dictionary = DICTIONARIES[activeLocale] ?? DICTIONARIES[FALLBACK_LOCALE];
+  return tFor(activeLocale, key, vars);
+}
+
+/**
+ * `t` for a given locale, without activating it.
+ *
+ * For content scripts: `activateLocale` writes `lang` on the document, and in a
+ * content script that document is Steam's page, not ours.
+ */
+export function tFor(
+  locale: Locale,
+  key: MessageKey,
+  vars?: Readonly<Record<string, string | number>>,
+): string {
+  const dictionary = DICTIONARIES[locale] ?? DICTIONARIES[FALLBACK_LOCALE];
   const template = dictionary[key] ?? DICTIONARIES[FALLBACK_LOCALE][key] ?? key;
   return interpolate(template, vars);
 }

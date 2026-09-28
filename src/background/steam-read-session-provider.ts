@@ -986,14 +986,21 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     const historicalCutoff = Math.floor(
       (this.now() - OFFER_HISTORY_WINDOW_MS) / 1_000,
     );
+    /*
+      With `active_only`, Steam ALSO returns every offer whose state changed
+      after `time_historical_cutoff`, and what it does with no cutoff at all is
+      its own business. A cutoff a year ahead asks for the active offers and
+      nothing else, the same way steam-tradeoffer-manager asks. The scam check
+      reads a heavy trader's inbox with this on every pass; his history is not
+      what it is looking for.
+    */
+    const activeOnlyCutoff = Math.floor(this.now() / 1_000) + 365 * 24 * 60 * 60;
     const response = await this.fetchSteamApi('GetTradeOffers', {
       get_received_offers: options.received === false ? '0' : '1',
       get_sent_offers: options.sent === false ? '0' : '1',
       active_only: options.activeOnly ? '1' : '0',
       historical_only: '0',
-      ...(options.activeOnly
-        ? {}
-        : { time_historical_cutoff: String(historicalCutoff) }),
+      time_historical_cutoff: String(options.activeOnly ? activeOnlyCutoff : historicalCutoff),
       ...(options.descriptions === false
         ? {}
         : { get_descriptions: '1', language: 'english' }),

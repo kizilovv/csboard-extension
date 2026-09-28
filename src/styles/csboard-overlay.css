@@ -1026,3 +1026,60 @@ a.inventory_item_link { top: 20px !important; }
   border: 0;
   background: #10151e;
 }
+
+/* ============================================================
+   P2P scam guard: an incoming offer asking for an item sold on
+   csboard, from someone who is not its buyer.
+   Drawn only on offers the background flagged; see
+   content-scripts/steam/p2p-scam-warning.ts.
+   ============================================================ */
+
+.csboard-scam-warning {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 2px solid #e46a5f;
+  border-radius: 4px;
+  background: #3b1a1a;
+  color: #f4dcda;
+  font-family: var(--steam-old-font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.csboard-scam-warning strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #ff8a80;
+  font-size: 17px;
+}
+
+.csboard-scam-warning p { margin: 0; }
+
+/* Above the Accept button after the first, swallowed click. */
+.csboard-scam-confirm-hint {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  background: #e46a5f;
+  color: #ffffff;
+  font-family: var(--steam-old-font);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Offers list: frame without changing the row's size. */
+.csboard-scam-offer {
+  box-shadow: 0 0 0 2px #e46a5f;
+  border-radius: 3px;
+}
+
+.csboard-scam-offer-label {
+  padding: 5px 10px;
+  background: #e46a5f;
+  color: #ffffff;
+  font-family: var(--steam-old-font);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: help;
+}

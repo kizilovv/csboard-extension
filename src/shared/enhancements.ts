@@ -16,7 +16,9 @@
   and cancels sales the seller has already committed to, and
   `page-credential-bridge`, which keeps the Steam read session alive that the
   delivery tracking depends on. Muting the decorations must not quietly stop a
-  seller fulfilling his orders.
+  seller fulfilling his orders. Nor does the incoming-offer scam warning
+  (`p2p-scam-warning`), which the two offer-page scripts start before their
+  own gate: it protects a sold skin, it does not decorate a page.
 */
 
 import { getSettings } from './storage';

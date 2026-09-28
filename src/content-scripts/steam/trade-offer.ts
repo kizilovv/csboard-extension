@@ -35,6 +35,7 @@ import {
   decorateAccessoryPrices,
 } from '../../shared/inspect-actions';
 import { INSPECT_3D_PAGE, buildInspect3dHref, openInspect3dDialog } from '../../shared/inspect-3d';
+import { guardScamOfferPage } from './p2p-scam-warning';
 
 const logger = createLogger('trade-offer');
 
@@ -1835,8 +1836,18 @@ async function init() {
 /* The master switch is checked here, once, before anything is drawn. */
 const bootstrap = () => { init().catch(() => {}); };
 
+/*
+  The scam warning starts OUTSIDE the switch: it guards a sold skin, not a
+  decoration. See p2p-scam-warning.ts.
+*/
+const startScamGuard = () => { guardScamOfferPage(); };
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => whenSiteEnabled('steam', bootstrap));
+  document.addEventListener('DOMContentLoaded', () => {
+    startScamGuard();
+    whenSiteEnabled('steam', bootstrap);
+  });
 } else {
+  startScamGuard();
   whenSiteEnabled('steam', bootstrap);
 }

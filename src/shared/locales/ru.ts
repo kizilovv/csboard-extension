@@ -33,6 +33,12 @@ export const ru: Record<MessageKey, string> = {
   'steamSession.body': 'Расширение отправляет и проверяет обмены через вход в Steam в этом браузере.',
   'steamSession.action': 'Войти в Steam',
 
+  // Входящий трейд с предметом, проданным на csboard (уведомление + страницы Steam)
+  'p2pScam.title': 'Осторожно: это не покупатель CSBoard',
+  'p2pScam.body': 'Вам прислали трейд с проданным на CSBoard предметом. CSBoard никогда не присылает вам трейды: обмен всегда отправляете вы. Принятие отдаст предмет бесплатно.',
+  'p2pScam.label': 'Не покупатель CSBoard',
+  'p2pScam.confirmAgain': 'Нажмите ещё раз, если уверены',
+
   // Цены
   'prices.title': 'Цены',
   'prices.pull': 'Синхр.',

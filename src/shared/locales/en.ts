@@ -35,6 +35,12 @@ export const en = {
   'steamSession.body': "The extension sends and checks trades through this browser's Steam login.",
   'steamSession.action': 'Log into Steam',
 
+  // Incoming offer asking for an item sold on csboard (notification + Steam pages)
+  'p2pScam.title': 'Careful: this is not your CSBoard buyer',
+  'p2pScam.body': 'You received a trade offer asking for an item you sold on CSBoard. CSBoard never sends you trade offers: you always send the trade yourself. Accepting it gives the item away for free.',
+  'p2pScam.label': 'Not your CSBoard buyer',
+  'p2pScam.confirmAgain': 'Click again if you are sure',
+
   // Prices
   'prices.title': 'Prices',
   'prices.pull': 'Sync',
