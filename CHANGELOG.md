@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.27
+
+- Warns a seller about the incoming-trade scam. In September five P2P sellers
+  accepted an incoming offer from a farm account that asked for the skin they
+  had just sold on CSBoard, taking it for the delivery. CSBoard never sends a
+  seller an offer; he always sends it. When an incoming offer asks for a skin
+  of a live CSBoard sale and does not come from that sale's buyer, the offer
+  page gets a red block and Accept needs a second click; the offers list marks
+  the offer. Nothing shows when the seller comes out ahead in value, and there
+  is no system notification.
+- Warns about the Steam API-key scam on a buyout. When an incoming offer asks
+  for a skin of a live CSBoard buyout and is neither the vendor's offer nor
+  from the vendor's bot, the same block appears with advice to revoke the API
+  key.
+- An offer missing from Steam's list is no longer confirmed to CSBoard as
+  cancelled. Its real state is read on its own first; an accepted offer is
+  never reported as a cancellation.
+
 ## 1.1.26
 
 - The extension now says when this browser has no Steam login. The tracking
