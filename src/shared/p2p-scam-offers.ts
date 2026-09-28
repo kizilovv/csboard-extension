@@ -48,7 +48,6 @@
 export const P2P_SCAM_OFFERS_KEY = 'p2p.scamOffers';
 
 /** Offer ids already announced by a notification, so each is announced once. */
-export const P2P_SCAM_NOTIFIED_KEY = 'p2p.scamOffersNotified';
 
 /*
   Sales that are still "sold" from the seller's point of view: from the buyer

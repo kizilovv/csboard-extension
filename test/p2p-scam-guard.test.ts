@@ -15,7 +15,6 @@ import test, { before, beforeEach } from 'node:test';
 
 import { createSteamReadSessionProvider } from '../src/background/steam-read-session-provider.ts';
 import {
-  P2P_SCAM_NOTIFIED_KEY,
   P2P_SCAM_OFFERS_KEY,
   accountIdFromSteamId64,
   findScamOffers,
@@ -186,10 +185,9 @@ beforeEach(() => {
   watchRows = [];
 });
 
-test('a failed Steam read produces no flag and no notification', async () => {
+test('a failed Steam read produces no flag', async () => {
   await runP2PScamGuard(async () => { throw new Error('steam-read-failed'); });
   assert.equal(local[P2P_SCAM_OFFERS_KEY], undefined);
-  assert.deepEqual(notifications, []);
 });
 
 test('a failed csboard read produces no flag and does not even ask Steam', async () => {
@@ -198,40 +196,34 @@ test('a failed csboard read produces no flag and does not even ask Steam', async
   await runP2PScamGuard(async () => { steamReads += 1; return [offer()]; });
   assert.equal(steamReads, 0);
   assert.equal(local[P2P_SCAM_OFFERS_KEY], undefined);
-  assert.deepEqual(notifications, []);
 });
 
-test('the farm offer is stored for the pages and announced once', async () => {
+test('the farm offer is stored for the pages, and no system notification is raised', async () => {
   await runP2PScamGuard(async () => [offer(), offer({ offerId: '8100000002', partnerAccountId: BUYER_ACCOUNT_ID })]);
   assert.deepEqual(
     readStoredScamFlags(local[P2P_SCAM_OFFERS_KEY]).map((flag) => flag.offerId),
     ['8100000001'],
   );
-  assert.deepEqual(notifications.map((note) => note.id), ['csboard-scam-offer:8100000001']);
-  assert.equal(notifications[0]?.title, 'Careful: this is not your CSBoard buyer');
-  assert.doesNotMatch(`${notifications[0]?.title} ${notifications[0]?.message}`, /—/);
+  // Owner, 2026-09-28: the warning lives on the offer page only.
+  assert.deepEqual(notifications, []);
 
-  // The next pass sees the same offer: still flagged, not announced again.
+  // The next pass sees the same offer: still flagged.
   await runP2PScamGuard(async () => [offer()]);
-  assert.equal(notifications.length, 1);
-  assert.deepEqual(local[P2P_SCAM_NOTIFIED_KEY], ['8100000001']);
+  assert.deepEqual(readStoredScamFlags(local[P2P_SCAM_OFFERS_KEY]).map((flag) => flag.offerId), ['8100000001']);
 
   // The offer is gone from the inbox (declined, accepted, expired): so is the flag.
   await runP2PScamGuard(async () => []);
   assert.deepEqual(local[P2P_SCAM_OFFERS_KEY], []);
-  assert.deepEqual(local[P2P_SCAM_NOTIFIED_KEY], []);
 });
 
 test('the new buyerSteamId field is read too, and a row without either is left out', async () => {
   deliveryRows = [{ orderId: 'order-sold', status: 'pending', assetId: SOLD_ASSET, buyerSteamId: BUYER_STEAM_ID }];
   await runP2PScamGuard(async () => [offer()]);
-  assert.equal(notifications.length, 1);
+  assert.deepEqual(readStoredScamFlags(local[P2P_SCAM_OFFERS_KEY]).map((flag) => flag.offerId), ['8100000001']);
 
   for (const key of Object.keys(local)) delete local[key];
-  notifications.length = 0;
   deliveryRows = [{ orderId: 'order-sold', status: 'pending', assetId: SOLD_ASSET, buyerSteamId: null }];
   await runP2PScamGuard(async () => [offer()]);
-  assert.deepEqual(notifications, []);
   assert.deepEqual(local[P2P_SCAM_OFFERS_KEY] ?? [], []);
 });
 

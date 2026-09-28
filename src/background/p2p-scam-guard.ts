@@ -13,9 +13,7 @@
 
   Stores the flagged offers in chrome.storage.local, where the Steam page
   scripts read them to put a red warning on the offer and a second click on
-  its Accept button, and raises one notification per offer. The notification
-  is for the seller who accepts from the Steam app on his phone and never opens
-  the offer in this browser: it is the only place this extension can reach him.
+  its Accept button. No system notification (owner, 2026-09-28).
 
   ── WHAT IT NEVER DOES ────────────────────────────────────────────────────
 
@@ -27,12 +25,10 @@
 */
 
 import { getApiBase } from '../shared/config';
-import { initI18n, t } from '../shared/i18n';
 import { createLogger } from '../shared/logger';
 import {
   ACTIVE_OFFER_STATES,
   LIVE_SALE_STATUSES,
-  P2P_SCAM_NOTIFIED_KEY,
   P2P_SCAM_OFFERS_KEY,
   findScamOffers,
   mergeScamFlags,
@@ -45,7 +41,6 @@ import { TRACK_PERIOD_FAST_MINUTES, registerP2PTrackAlarm } from './p2p-trade-tr
 
 const logger = createLogger('p2p-scam-guard');
 
-const NOTIFICATION_PREFIX = 'csboard-scam-offer:';
 
 /** Statuses in which the seller still holds the item, which is when the scam can work. */
 const SELLER_HOLDS_ITEM = new Set(['pending', 'trade_pending']);
@@ -114,64 +109,20 @@ async function readLiveSales(): Promise<ScamGuardSale[] | null> {
   return [...byOrder.values()].filter((sale) => LIVE_SALE_STATUSES.has(sale.status));
 }
 
-async function readStored(): Promise<{ flags: ScamOfferFlag[]; notified: Set<string> }> {
+async function readStoredFlags(): Promise<ScamOfferFlag[]> {
   try {
-    const stored = await chrome.storage.local.get([P2P_SCAM_OFFERS_KEY, P2P_SCAM_NOTIFIED_KEY]);
-    const notified = stored?.[P2P_SCAM_NOTIFIED_KEY];
-    return {
-      flags: readStoredScamFlags(stored?.[P2P_SCAM_OFFERS_KEY]),
-      notified: new Set(Array.isArray(notified) ? notified.filter((id): id is string => typeof id === 'string') : []),
-    };
+    const stored = await chrome.storage.local.get(P2P_SCAM_OFFERS_KEY);
+    return readStoredScamFlags(stored?.[P2P_SCAM_OFFERS_KEY]);
   } catch {
-    /*
-      Unreadable storage forgets what was announced, so a flagged offer may be
-      announced again. Accepted on purpose, the opposite of the sales badge's
-      choice: a repeat costs a moment of annoyance (the notification id is per
-      offer, so Chrome replaces it rather than stacking), a missed warning here
-      costs a skin.
-    */
-    return { flags: [], notified: new Set() };
+    return [];
   }
 }
 
-/** One notification per offer. Returns the offer ids that were actually announced. */
-async function announce(flags: readonly ScamOfferFlag[]): Promise<string[]> {
-  if (flags.length === 0) return [];
-  try {
-    await initI18n();
-  } catch {
-    // English is the fallback dictionary.
-  }
-  const announced: string[] = [];
-  for (const flag of flags) {
-    try {
-      await chrome.notifications.create(`${NOTIFICATION_PREFIX}${flag.offerId}`, {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: t('p2pScam.title'),
-        message: t('p2pScam.body'),
-        // A warning about a skin one tap from leaving for nothing stays until
-        // it is read. Not gated on the sale-alerts switch either: that switch
-        // is about "you sold something", this is about not losing it.
-        requireInteraction: true,
-      });
-      announced.push(flag.offerId);
-    } catch (error) {
-      // Not remembered as announced, so the next pass tries again.
-      logger.warn('Could not raise a scam-offer notification', { offerId: flag.offerId, error: String(error) });
-    }
-  }
-  return announced;
-}
-
-/** Clicking the warning opens the offer, where the page puts the same warning on it. */
-chrome.notifications?.onClicked.addListener((notificationId) => {
-  if (!notificationId.startsWith(NOTIFICATION_PREFIX)) return;
-  const offerId = notificationId.slice(NOTIFICATION_PREFIX.length);
-  if (!/^[0-9]+$/.test(offerId)) return;
-  void chrome.tabs.create({ url: `https://steamcommunity.com/tradeoffer/${offerId}/` });
-  void chrome.notifications.clear(notificationId);
-});
+/*
+  No system notification (owner, 2026-09-28): the warning lives on the offer
+  itself, the page and the list, where the seller is about to act. A desktop
+  notification for every flagged offer is one more thing to click away.
+*/
 
 /**
  * One check. `readReceivedOffers` is injected for the same reason the
@@ -182,9 +133,9 @@ export async function runP2PScamGuard(
 ): Promise<void> {
   const sales = await readLiveSales();
   if (sales === null) return;
-  const stored = await readStored();
+  const storedFlags = await readStoredFlags();
   // Nothing sold and nothing flagged: nothing to look at in Steam.
-  if (sales.length === 0 && stored.flags.length === 0) return;
+  if (sales.length === 0 && storedFlags.length === 0) return;
 
   /*
     While the seller still holds a sold item, keep the pass on the fast clock.
@@ -212,10 +163,10 @@ export async function runP2PScamGuard(
       .filter((offer) => offer.direction === 'received' && ACTIVE_OFFER_STATES.has(offer.state))
       .map((offer) => offer.offerId),
   );
-  const flags = mergeScamFlags(stored.flags, fresh, activeOfferIds);
+  const flags = mergeScamFlags(storedFlags, fresh, activeOfferIds);
 
-  const unannounced = flags.filter((flag) => !stored.notified.has(flag.offerId));
-  for (const flag of unannounced) {
+  const known = new Set(storedFlags.map((flag) => flag.offerId));
+  for (const flag of flags.filter((f) => !known.has(f.offerId))) {
     logger.warn('Incoming offer asks for an item sold on csboard, from someone who is not its buyer', {
       offerId: flag.offerId,
       orderIds: flag.orderIds,
@@ -224,22 +175,9 @@ export async function runP2PScamGuard(
     });
   }
 
-  // Stored before the notification, so the page already knows when the seller clicks it.
   try {
     await chrome.storage.local.set({ [P2P_SCAM_OFFERS_KEY]: flags });
   } catch (error) {
     logger.warn('Could not store scam-offer flags', { error: String(error) });
-  }
-
-  const announced = new Set(await announce(unannounced));
-  // Pruned to what is still flagged: an offer that stopped being active never
-  // becomes active again, so its id has nothing left to guard against.
-  const notified = flags
-    .map((flag) => flag.offerId)
-    .filter((offerId) => stored.notified.has(offerId) || announced.has(offerId));
-  try {
-    await chrome.storage.local.set({ [P2P_SCAM_NOTIFIED_KEY]: notified });
-  } catch {
-    // Worst case one warning is shown twice; better than a failed write silencing the next.
   }
 }

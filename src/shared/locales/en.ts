@@ -37,7 +37,7 @@ export const en = {
 
   // Incoming offer asking for an item sold on csboard (notification + Steam pages)
   'p2pScam.title': 'Careful: this is not your CSBoard buyer',
-  'p2pScam.body': 'You received a trade offer asking for an item you sold on CSBoard. CSBoard never sends you trade offers: you always send the trade yourself. Accepting it gives the item away for free.',
+  'p2pScam.body': 'This item is already sold on CSBoard, and this offer is not from the buyer. CSBoard never sends you trades: you always send the offer. If you give the item here, you cannot deliver the CSBoard sale.',
   'p2pScam.label': 'Not your CSBoard buyer',
   'p2pScam.confirmAgain': 'Click again if you are sure',
 
