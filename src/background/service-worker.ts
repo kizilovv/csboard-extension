@@ -59,10 +59,12 @@ import { createLogger } from '../shared/logger';
 import type { MarketHashName, PriceData } from '../shared/types';
 import { GatewayPayloadError } from '../shared/gateway-dto';
 import {
+  isSteamTokenExpired,
   isTrustedSteamPageSender,
   normalizeSteamPageCredential,
   normalizeSteamPageCredentialResponse,
   STEAM_COMMUNITY_ORIGIN,
+  steamTokenExpiresAt,
   type SteamPageCredential,
   type SteamPageCredentialRequest,
 } from '../shared/steam-page-credential';
@@ -156,7 +158,9 @@ router.on('REFRESH_PRICES', async () => {
 let steamReadProvider: SteamReadSessionProvider | null = null;
 let steamReadProviderAccount: string | null = null;
 const MAX_STEAM_CREDENTIAL_TABS = 5;
-const STEAM_CREDENTIAL_TAB_TIMEOUT_MS = 1_000;
+// Long enough for a tab whose own token has expired to fetch a fresh one
+// first-party (page-credential-bridge.ts) and still answer within this ask.
+const STEAM_CREDENTIAL_TAB_TIMEOUT_MS = 3_000;
 let steamCredentialRequestInFlight: {
   readonly steamId: string;
   readonly promise: Promise<SteamPageCredential | null>;
@@ -234,8 +238,24 @@ async function performSteamPageCredentialRequest(
       return null;
     }
   }));
-  const matching = responses.find((credential) => credential?.pageSteamId === expectedSteamId);
+  /*
+    The tab whose token lives longest, not the first one Chrome lists. Tabs come
+    back in window order, so a Steam tab left open since yesterday sits ahead of
+    the one opened a minute ago and its long-dead token won every time.
+  */
+  const now = Date.now();
+  const matching = responses
+    .filter((credential): credential is SteamPageCredential => (
+      credential?.pageSteamId === expectedSteamId &&
+      !isSteamTokenExpired(credential.pageAccessToken, now)
+    ))
+    .sort((a, b) => (
+      (steamTokenExpiresAt(b.pageAccessToken) ?? 0) - (steamTokenExpiresAt(a.pageAccessToken) ?? 0)
+    ))[0];
   if (matching) return matching;
+  // A tab of the right account with a dead token is no credential, and no
+  // mismatch either.
+  if (responses.some((credential) => credential?.pageSteamId === expectedSteamId)) return null;
   if (responses.some((credential) => credential !== null)) {
     throw new Error('STEAM_ACCOUNT_MISMATCH');
   }

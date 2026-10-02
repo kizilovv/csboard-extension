@@ -248,6 +248,157 @@ test('explicit token refresh replaces the private credential without exposing it
   assert.equal('accessToken' in provider, false);
 });
 
+/** A Steam-shaped token: a JWT whose payload says when it dies. */
+function steamJwt(expiresAtMs: number, tag = 'a'): string {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ typ: 'JWT', alg: 'EdDSA' })}.` +
+    `${part({ sub: STEAM_ID, exp: Math.floor(expiresAtMs / 1_000) })}.${tag.repeat(40)}`;
+}
+
+function tokenPageWith(url: string, token: string): Response {
+  const response = new Response(
+    `<script>var g_steamID = "${STEAM_ID}";</script>` +
+    `<div data-loyalty_webapi_token="${token}"></div>`,
+    { status: 200 },
+  );
+  Object.defineProperty(response, 'url', { value: url });
+  return response;
+}
+
+const EMPTY_HISTORY = JSON.stringify({
+  response: { trades: [], descriptions: [], more: false, total_trades: 0 },
+});
+
+test('a page token past its own expiry is not accepted, however recently it was offered', async () => {
+  // 2026-10-02: a Steam tab open since the day before kept offering the token
+  // it loaded with. The worker stamped it fresh on every offer and every read
+  // answered 403 for three hours, with the browser open and signed in.
+  const now = 2_000_000_000_000;
+  const dead = steamJwt(now - 60 * 60_000, 'd');
+  const fresh = steamJwt(now + 20 * 60 * 60_000, 'f');
+  const sentTokens: string[] = [];
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    now: () => now,
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://steamcommunity.com/')) return tokenPageWith(url, fresh);
+      sentTokens.push(new URL(url).searchParams.get('access_token') ?? '');
+      return new Response(EMPTY_HISTORY, { status: 200 });
+    }) as typeof fetch,
+  });
+
+  provider.offerAccessToken(dead, STEAM_ID);
+  assert.equal(provider.hasUsableAccessToken?.(), false);
+
+  await provider.readRecentTrades(1);
+  assert.deepEqual(sentTokens, [fresh]);
+});
+
+test('a token that expires while held stops being usable without asking Steam', () => {
+  let now = 2_000_000_000_000;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    now: () => now,
+    fetchImpl: (async () => {
+      throw new Error('network must not be touched by the memory-only status check');
+    }) as typeof fetch,
+  });
+  provider.offerAccessToken(steamJwt(now + 10 * 60_000), STEAM_ID);
+  assert.equal(provider.hasUsableAccessToken?.(), true);
+
+  now += 11 * 60_000;
+  assert.equal(provider.hasUsableAccessToken?.(), false);
+});
+
+test('a token Steam refused is not taken back from a page', async () => {
+  // No expiry to read here: Steam's answer is the only evidence, and it has to
+  // be enough. The tab keeps offering the same token; the mint has a new one.
+  const refused = 'r'.repeat(40);
+  const minted = 'm'.repeat(40);
+  const sentTokens: string[] = [];
+  let pageAsks = 0;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    requestFirstPartyCredential: async () => {
+      pageAsks += 1;
+      return { token: refused, steamId: STEAM_ID };
+    },
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://steamcommunity.com/')) return tokenPageWith(url, minted);
+      const token = new URL(url).searchParams.get('access_token') ?? '';
+      sentTokens.push(token);
+      return token === refused
+        ? new Response('', { status: 403 })
+        : new Response(EMPTY_HISTORY, { status: 200 });
+    }) as typeof fetch,
+  });
+  provider.offerAccessToken(refused, STEAM_ID);
+
+  await provider.readRecentTrades(1);
+  assert.deepEqual(sentTokens, [refused, minted]);
+  assert.equal(pageAsks, 1);
+
+  // The tab offers it again four minutes later, as it always did.
+  provider.offerAccessToken(refused, STEAM_ID);
+  await provider.readRecentTrades(1);
+  assert.deepEqual(sentTokens, [refused, minted, minted]);
+});
+
+test('a refusal Steam does not repeat is forgotten', async () => {
+  const token = 't'.repeat(40);
+  let apiCalls = 0;
+  let pageReads = 0;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://steamcommunity.com/')) {
+        pageReads += 1;
+        return tokenPageWith(url, token);
+      }
+      apiCalls += 1;
+      // One 403 out of nowhere, then Steam is itself again.
+      return apiCalls === 1
+        ? new Response('', { status: 403 })
+        : new Response(EMPTY_HISTORY, { status: 200 });
+    }) as typeof fetch,
+  });
+  provider.offerAccessToken(token, STEAM_ID);
+
+  await provider.readRecentTrades(1);
+  assert.equal(provider.hasUsableAccessToken?.(), true);
+
+  await provider.readRecentTrades(1);
+  assert.equal(apiCalls, 3);
+  assert.equal(pageReads, 1);
+});
+
+test('while Steam refuses the session own token, the page is minted once a minute, not per read', async () => {
+  let now = 2_000_000_000_000;
+  const token = 's'.repeat(40);
+  let pageReads = 0;
+  const provider = createSteamReadSessionProvider({
+    steamId: STEAM_ID,
+    now: () => now,
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://steamcommunity.com/')) {
+        pageReads += 1;
+        return tokenPageWith(url, token);
+      }
+      return new Response('', { status: 403 });
+    }) as typeof fetch,
+  });
+
+  for (let read = 0; read < 3; read += 1) {
+    await assert.rejects(provider.readRecentTrades(1), /INVALID_PAYLOAD/);
+    now += 5_000;
+  }
+  assert.equal(pageReads, 1);
+});
+
 test('accepted Steam offers use post-trade ids only for received items', async () => {
   const offer = {
     ...rawOffer(30, 1_700_000_030),

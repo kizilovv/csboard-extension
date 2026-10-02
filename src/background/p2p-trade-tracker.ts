@@ -429,21 +429,28 @@ export async function trackP2PTrades(
   registerP2PTrackAlarm(pacePeriodMinutes(pending, unsent, purchases));
   if (pending.length === 0 && unsent.length === 0 && purchases.length === 0) return outcome;
 
-  let offers: ReadonlyArray<TrackedOffer>;
+  /*
+    A failed offers read costs the offers half and nothing else.
+
+    It used to end the pass, and the history read below never ran. That is the
+    read a payout waits on once Steam's protection is over, so one Steam fault
+    on the half that only says "sent" or "accepted" held up money that had
+    nothing to do with it.
+  */
+  let offers: ReadonlyArray<TrackedOffer> | null = null;
   try {
     offers = await readOffers();
   } catch (error) {
     logger.warn('Could not read Steam offers', { error: describeError(error) });
     outcome.errors.offers = describeError(error).slice(0, 300);
-    return outcome;
   }
 
   // First the sales csboard does not yet know were sent: the send clock is
   // running against them, and every minute matters more there than anywhere.
-  await annotateOffersSentOutside(unsent, offers);
+  if (offers) await annotateOffersSentOutside(unsent, offers);
   if (pending.length === 0 && purchases.length === 0) return outcome;
 
-  const byOfferId = new Map(offers.map((offer) => [offer.offerId, offer]));
+  const byOfferId = new Map((offers ?? []).map((offer) => [offer.offerId, offer]));
   for (const sale of pending) {
     const offer = byOfferId.get(sale.steamTradeOfferId);
     // An offer we cannot see is NOT reported as anything. It may be older than

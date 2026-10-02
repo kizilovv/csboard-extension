@@ -4,9 +4,11 @@ import test from 'node:test';
 
 import {
   isSteamPageCredentialRequest,
+  isSteamTokenExpired,
   isTrustedSteamPageSender,
   normalizeSteamPageCredential,
   normalizeSteamPageCredentialResponse,
+  steamTokenExpiresAt,
 } from '../src/shared/steam-page-credential.ts';
 
 const TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9.payload-part.signature-part';
@@ -177,7 +179,7 @@ test('the credential bridge contract is exact-schema and bounded', () => {
   }), null);
 });
 
-test('the bridge is exact-origin, bounded-retry, and has no storage/log/network capability', async () => {
+test('the bridge is exact-origin, bounded-retry, has no storage/log capability, and its one request is Steam\'s own page', async () => {
   const manifest = JSON.parse(await readFile(
     new URL('../src/manifest.json', import.meta.url),
     'utf8',
@@ -194,7 +196,17 @@ test('the bridge is exact-origin, bounded-retry, and has no storage/log/network 
   assert.match(source, /CREDENTIAL_REFRESH_MS = 4 \* 60 \* 1_000/);
   assert.match(source, /isSteamPageCredentialRequest\(message\)/);
   assert.match(source, /sender\.id !== chrome\.runtime\.id/);
-  assert.doesNotMatch(source, /chrome\.storage|\bfetch\s*\(|createLogger|console\./);
+  assert.doesNotMatch(source, /chrome\.storage|createLogger|console\./);
+  /*
+    The bridge holds a credential, so where it can talk to is the whole of its
+    risk. It may ask Steam for the page it is already on the origin of, to
+    replace a token that expired while the tab sat open, and nothing else: one
+    fetch, to a constant path on the Steam origin, and no other way out.
+  */
+  assert.equal(source.match(/\bfetch\s*\(/g)?.length, 1);
+  assert.match(source, /fetch\(`\$\{STEAM_COMMUNITY_ORIGIN\}\$\{TOKEN_PAGE_PATH\}`/);
+  assert.match(source, /const TOKEN_PAGE_PATH = '\/[a-z/?=]+';/);
+  assert.doesNotMatch(source, /XMLHttpRequest|sendBeacon|WebSocket|EventSource|importScripts/);
 });
 
 test('a token minted for another account is refused by the read provider', async () => {
@@ -258,4 +270,36 @@ test('the read provider survives a brand-checked global fetch', async () => {
   } finally {
     (globalThis as Record<string, unknown>)['fetch'] = realFetch;
   }
+});
+
+test('a Steam token says when it expires, and one that does not is unknown rather than dead', () => {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const expSeconds = 1_790_958_768;
+  const jwt = `${part({ typ: 'JWT', alg: 'EdDSA' })}.${part({ sub: STEAM_ID, exp: expSeconds })}.signature`;
+
+  assert.equal(steamTokenExpiresAt(jwt), expSeconds * 1_000);
+  assert.equal(isSteamTokenExpired(jwt, expSeconds * 1_000 - 10 * 60_000), false);
+  // Inside the last minute counts as gone: the request would land too late.
+  assert.equal(isSteamTokenExpired(jwt, expSeconds * 1_000 - 30_000), true);
+  assert.equal(isSteamTokenExpired(jwt, expSeconds * 1_000 + 1), true);
+
+  for (const opaque of [TOKEN, 'a'.repeat(40), `${part({})}.${part({ sub: STEAM_ID })}.signature`]) {
+    assert.equal(steamTokenExpiresAt(opaque), null);
+    assert.equal(isSteamTokenExpired(opaque, Date.now()), false);
+  }
+});
+
+test('the credential is read the same way out of a parsed copy of a refetched page', async () => {
+  const mod = await import('../src/shared/steam-page-credential.ts');
+  const copy = {
+    scripts: [{ src: '', textContent: `var g_steamID = "${STEAM_ID}";` }],
+    querySelector: (selector: string) => (
+      selector === '#application_config' ? { getAttribute: () => `&quot;${TOKEN}&quot;` } : null
+    ),
+  } as unknown as Document;
+
+  assert.deepEqual(mod.readSteamPageCredential(copy), {
+    pageAccessToken: TOKEN,
+    pageSteamId: STEAM_ID,
+  });
 });

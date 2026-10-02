@@ -10,6 +10,7 @@ import {
   type SteamInventoryContextId,
 } from '../shared/gateway-dto';
 import { parseSteamAssetProperties } from '../shared/steam-asset-properties';
+import { isSteamTokenExpired } from '../shared/steam-page-credential';
 
 const STEAM_API_ROOT = 'https://api.steampowered.com/IEconService';
 const STEAM_TOKEN_PAGE = 'https://steamcommunity.com/my/tradehistory?l=english';
@@ -17,9 +18,13 @@ const MAX_INVENTORY_PAGES = 20;
 // Portfolio auto-sync runs hourly. A five-minute local TTL made the worker
 // throw away a still-valid first-party page token long before the next run and
 // fall back to a cross-site Steam page fetch that third-party-cookie blocking
-// commonly answers as logged out. The token remains process-memory-only and is
-// still rejected immediately by Steam when it actually expires.
+// commonly answers as logged out. The token remains process-memory-only, and
+// one that has expired or that Steam has refused is never used whatever this
+// says - see `isLive`.
 const TOKEN_MEMORY_TTL_MS = 70 * 60 * 1_000;
+// A mint is a whole Steam page. When Steam refuses the very token the page
+// carries, minting again within the minute returns the same page.
+const MINT_MIN_INTERVAL_MS = 60 * 1_000;
 /** How far back settled offers stay interesting to a portfolio. */
 const OFFER_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
 
@@ -541,6 +546,13 @@ function normalizeTradeItems(
 class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
   private memoryToken: MemoryToken | null = null;
   private pendingToken: Promise<string> | null = null;
+  /**
+   * The token Steam last answered 401/403 to. A Steam tab open past its token's
+   * lifetime re-offers the same dead token every few minutes, and accepting it
+   * again is what turned one expiry into a failure on every pass.
+   */
+  private refusedToken: string | null = null;
+  private lastMintAt = 0;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly requestFirstPartyCredential?: SteamReadSessionProviderOptions[
@@ -564,12 +576,21 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
     if (tokenSteamId !== this.steamId) return;
     const normalized = token.replace(/&quot;/g, '').replace(/"/g, '').trim();
     if (normalized.length < 16 || normalized.length > 4_096 || /\s/.test(normalized)) return;
+    // "Offered just now" says nothing about the token: the page it came from
+    // may have loaded yesterday.
+    if (!this.isLive(normalized)) return;
     this.memoryToken = { value: normalized, mintedAt: this.now() };
+  }
+
+  /** Not past its own expiry, and not the one Steam has already refused. */
+  private isLive(token: string): boolean {
+    return token !== this.refusedToken && !isSteamTokenExpired(token, this.now());
   }
 
   hasUsableAccessToken(): boolean {
     return this.memoryToken !== null &&
-      this.now() - this.memoryToken.mintedAt < TOKEN_MEMORY_TTL_MS;
+      this.now() - this.memoryToken.mintedAt < TOKEN_MEMORY_TTL_MS &&
+      this.isLive(this.memoryToken.value);
   }
 
   forgetSession(): void {
@@ -625,12 +646,18 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
       throw new GatewayPayloadError('INVALID_PAYLOAD', { reason: 'steam-session-unavailable' });
     }
     this.memoryToken = { value: token, mintedAt: this.now() };
+    this.lastMintAt = this.now();
+    // The browser's own session vouches for this token again, so Steam is asked
+    // once more: a refusal that was Steam's hiccup must not outlive it.
+    if (token === this.refusedToken) this.refusedToken = null;
     return token;
   }
 
   private async getAccessToken(forceRefresh = false): Promise<string> {
-    if (!forceRefresh && this.memoryToken &&
-        this.now() - this.memoryToken.mintedAt < TOKEN_MEMORY_TTL_MS) {
+    if (!forceRefresh && this.memoryToken && this.hasUsableAccessToken()) {
+      return this.memoryToken.value;
+    }
+    if (this.memoryToken && this.now() - this.lastMintAt < MINT_MIN_INTERVAL_MS) {
       return this.memoryToken.value;
     }
     if (!this.pendingToken) {
@@ -657,12 +684,11 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
         referrerPolicy: 'no-referrer',
         headers: { Accept: 'application/json' },
       });
-      if ((response.status === 401 || response.status === 403) && attempt === 0) {
-        // Keep the page-derived credential in memory until a replacement has
-        // actually been minted. The forced second attempt bypasses it; retaining
-        // it only prevents a failed cross-site mint from destroying the sole
-        // first-party proof before a Steam page can offer a fresh token.
-        continue;
+      if (response.status === 401 || response.status === 403) {
+        // Steam's word on this token outranks ours: it is not offered back in,
+        // and the retry gets a different one or none.
+        this.refusedToken = token;
+        if (attempt === 0) continue;
       }
       if (!response.ok) {
         throw new GatewayPayloadError('INVALID_PAYLOAD', {
@@ -670,6 +696,8 @@ class BrowserSteamReadSessionProvider implements SteamReadSessionProvider {
           status: response.status,
         });
       }
+      // A refusal that did not repeat was Steam's hiccup, not the token's end.
+      if (token === this.refusedToken) this.refusedToken = null;
       return readResponseRoot(await response.json());
     }
     throw new GatewayPayloadError('INVALID_PAYLOAD', { reason: 'steam-session-unavailable' });

@@ -36,9 +36,43 @@ function cleanToken(raw: string | null | undefined): string | null {
   return token;
 }
 
-function uniqueInlineScriptMatch(pattern: RegExp): string | null {
+/**
+ * When Steam itself stops honouring this token, read out of the token.
+ *
+ * The webapi token is a JWT that lives 24 hours, and the copy in a page's DOM
+ * is the one Steam wrote when THAT PAGE loaded: a tab left open overnight still
+ * carries yesterday's. Nothing here used to look, so such a tab kept handing
+ * the worker a dead token, the worker stamped it fresh, and every Steam read
+ * answered 403 until the tab happened to be reloaded (2026-10-02: a seller
+ * with the browser open all day, 117 failed passes in a row, his payout
+ * waiting on a history read that could not happen).
+ *
+ * `null` when the token does not say: not a JWT, or no `exp`. That is "unknown",
+ * never "expired" - Steam stays the judge of a token we cannot read.
+ */
+export function steamTokenExpiresAt(token: string): number | null {
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  try {
+    const claims: unknown = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    const exp = (claims as { exp?: unknown } | null)?.exp;
+    return typeof exp === 'number' && Number.isFinite(exp) && exp > 0 ? exp * 1_000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A request sent now must not land after the token died. */
+const STEAM_TOKEN_EXPIRY_MARGIN_MS = 60 * 1_000;
+
+export function isSteamTokenExpired(token: string, now: number): boolean {
+  const expiresAt = steamTokenExpiresAt(token);
+  return expiresAt !== null && expiresAt - STEAM_TOKEN_EXPIRY_MARGIN_MS <= now;
+}
+
+function uniqueInlineScriptMatch(doc: Document, pattern: RegExp): string | null {
   const matches = new Set<string>();
-  for (const script of Array.from(document.scripts)) {
+  for (const script of Array.from(doc.scripts)) {
     // Steam's account bootstrap is inline. Never inspect remote script source
     // text or arbitrary body HTML, where user-authored content can imitate the
     // `g_steamID` spelling and cause an account-mismatch denial of service.
@@ -108,17 +142,24 @@ export function isTrustedSteamPageSender(
   }
 }
 
-export function readSteamPageCredential(): SteamPageCredential | null {
-  const config = document.querySelector('#application_config');
+/**
+ * `doc` is the live page by default, and a parsed copy of a refetched one when
+ * the page's own token has expired (page-credential-bridge.ts). Same strict
+ * extraction either way.
+ */
+export function readSteamPageCredential(doc: Document = document): SteamPageCredential | null {
+  const config = doc.querySelector('#application_config');
   const token = cleanToken(config?.getAttribute('data-loyalty_webapi_token')) ??
     // Some Steam pages ship the config blob without the attribute; the token is
     // still in a Steam-owned inline bootstrap script.
     cleanToken(uniqueInlineScriptMatch(
+      doc,
       /data-loyalty_webapi_token\s*=\s*"([^"]+)"/,
     ));
   if (!token) return null;
 
   const steamId = uniqueInlineScriptMatch(
+    doc,
     /(?:^|[;\n]\s*)(?:var\s+)?g_steamID\s*=\s*"(\d{17})"\s*;/,
   );
   if (!steamId) return null;

@@ -206,13 +206,30 @@ for (const forbiddenCapability of [
   'localStorage',
   'sessionStorage',
   'indexedDB',
-  'fetch(',
   'XMLHttpRequest',
   'sendBeacon',
+  'WebSocket',
+  'EventSource',
 ]) {
   if (steamCredentialBridge.includes(forbiddenCapability)) {
     fail(`Steam credential bridge includes forbidden capability: ${forbiddenCapability}`);
   }
+}
+/*
+  The bridge holds a credential, so its network surface is pinned rather than
+  merely limited. Since 1.1.28 it may ask Steam for the page it already runs on
+  the origin of, to replace a token that expired while the tab sat open. That
+  is all: one fetch, to a constant path on the only origin the bundle names, a
+  plain GET that carries nothing of ours.
+*/
+const bridgeUrls = new Set(steamCredentialBridge.match(/https?:\/\/[^\s"'`]+/g) || []);
+if ((steamCredentialBridge.match(/\bfetch\s*\(/g) || []).length !== 1 ||
+    !steamCredentialBridge.includes('fetch(`${STEAM_COMMUNITY_ORIGIN}${TOKEN_PAGE_PATH}`') ||
+    !steamCredentialBridge.includes('var STEAM_COMMUNITY_ORIGIN = "https://steamcommunity.com";') ||
+    !/var TOKEN_PAGE_PATH = "\/[a-z/?=]+";/.test(steamCredentialBridge) ||
+    bridgeUrls.size !== 1 || !bridgeUrls.has('https://steamcommunity.com') ||
+    /\b(?:method|body)\s*:/.test(steamCredentialBridge)) {
+  fail('Steam credential bridge may make exactly one GET, to the Steam page it runs on');
 }
 
 const buffInterceptor = readFileSync(
