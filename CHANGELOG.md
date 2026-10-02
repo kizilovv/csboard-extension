@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.28
+
+- A Steam tab left open for more than a day no longer breaks the extension.
+  Steam's token lives 24 hours and a page keeps the one it loaded with, so an
+  old tab kept handing over a dead token and every Steam read failed with 403
+  until the tab was reloaded: sales stopped updating and a payout waited on a
+  check that could not run, with the browser open and signed in. The extension
+  now reads the token's own expiry, never accepts an expired one, prefers the
+  Steam tab with the freshest token, and an old tab fetches a current token
+  from Steam by itself.
+- A token Steam has refused is not accepted again from a page.
+- A failed read of the offers list no longer stops the trade-history check,
+  which is the one a payout waits on after Steam's seven-day protection ends.
+
 ## 1.1.27
 
 - Warns a seller about the incoming-trade scam. In September five P2P sellers
